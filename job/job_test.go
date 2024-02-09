@@ -1,0 +1,119 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of Cilium
+
+package job
+
+import (
+	"context"
+	"runtime"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"go.uber.org/goleak"
+
+	"github.com/cilium/hive"
+	"github.com/cilium/hive/cell"
+)
+
+// Configure a generous timeout to prevent flakes when running in a noisy CI environment.
+var (
+	tick    = 10 * time.Millisecond
+	timeout = 5 * time.Second
+)
+
+func TestMain(m *testing.M) {
+	cleanup := func(exitCode int) {
+		// Force garbage-collection to force finalizers to run and catch
+		// missing Event.Done() calls.
+		runtime.GC()
+	}
+	goleak.VerifyTestMain(m, goleak.Cleanup(cleanup))
+}
+
+func fixture(fn func(Registry, cell.Health, cell.Lifecycle)) *hive.Hive {
+	return hive.New(
+		cell.SimpleHealthCell,
+		Cell,
+		cell.Module("test", "test module", cell.Invoke(fn)),
+	)
+}
+
+// This test asserts that the test registry hold on to references to its groups
+func TestRegistry(t *testing.T) {
+	t.Parallel()
+
+	var (
+		r1 Registry
+		g1 Group
+		g2 Group
+	)
+
+	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
+		r1 = r
+		g1 = r.NewGroup(s)
+		g2 = r.NewGroup(s)
+	})
+	h.Populate()
+
+	if r1.(*registry).groups[0] != g1 {
+		t.Fail()
+	}
+	if r1.(*registry).groups[1] != g2 {
+		t.Fail()
+	}
+}
+
+// This test asserts that jobs are queued, until the hive has been started
+func TestGroup_JobQueue(t *testing.T) {
+	t.Parallel()
+
+	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
+		g := r.NewGroup(s)
+		g.Add(
+			OneShot("queued1", func(ctx context.Context, health cell.Health) error { return nil }),
+			OneShot("queued2", func(ctx context.Context, health cell.Health) error { return nil }),
+		)
+		g.Add(
+			OneShot("queued3", func(ctx context.Context, health cell.Health) error { return nil }),
+			OneShot("queued4", func(ctx context.Context, health cell.Health) error { return nil }),
+		)
+		if len(g.(*group).queuedJobs) != 4 {
+			t.Fatal()
+		}
+		l.Append(g)
+	})
+
+	h.Populate()
+}
+
+// This test asserts that jobs can be added at runtime.
+func TestGroup_JobRuntime(t *testing.T) {
+	t.Parallel()
+
+	var (
+		g Group
+		i atomic.Int32
+	)
+
+	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
+		g = r.NewGroup(s)
+		l.Append(g)
+	})
+
+	h.Start(context.Background())
+
+	done := make(chan struct{})
+	g.Add(OneShot("runtime", func(ctx context.Context, health cell.Health) error {
+		i.Add(1)
+		close(done)
+		return nil
+	}))
+
+	assert.EventuallyWithT(t, func(c *assert.CollectT) {
+		assert.Equal(c, int32(1), i.Load())
+	}, timeout, tick)
+
+	h.Stop(context.Background())
+}
