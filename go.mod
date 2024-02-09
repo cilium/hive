@@ -3,7 +3,7 @@ module github.com/cilium/hive
 go 1.21.3
 
 require (
-	github.com/cilium/stream v0.0.0-20240209112636-fcc074fbb98f
+	github.com/cilium/stream v0.0.0-20240209152734-a0792b51812d
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc
 	github.com/mitchellh/mapstructure v1.5.0
 	github.com/spf13/cast v1.6.0

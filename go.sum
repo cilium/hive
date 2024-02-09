@@ -1,7 +1,7 @@
-github.com/cilium/stream v0.0.0-20240203065630-8b0274262fcf h1:vkQgIChGXLCL7+DWpflcBTHhhpGPdKyvegnTUl6myrA=
-github.com/cilium/stream v0.0.0-20240203065630-8b0274262fcf/go.mod h1:3VLiLgs8wfjirkuYqos4t0IBPQ+sXtf3tFkChLm6ARM=
 github.com/cilium/stream v0.0.0-20240209112636-fcc074fbb98f h1:xu4GC6RjabwUWcPTkjM+8A+ZbmAAUmT4fJ3QMRfKgrY=
 github.com/cilium/stream v0.0.0-20240209112636-fcc074fbb98f/go.mod h1:3VLiLgs8wfjirkuYqos4t0IBPQ+sXtf3tFkChLm6ARM=
+github.com/cilium/stream v0.0.0-20240209152734-a0792b51812d h1:p6MgATaKEB9o7iAsk9rlzXNDMNCeKPAkx4Y8f+Zq8X8=
+github.com/cilium/stream v0.0.0-20240209152734-a0792b51812d/go.mod h1:3VLiLgs8wfjirkuYqos4t0IBPQ+sXtf3tFkChLm6ARM=
 github.com/cpuguy83/go-md2man/v2 v2.0.3/go.mod h1:tgQtvFlXSQOSOSIRvRPT7W67SCa46tRHOmNcaadrF8o=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
