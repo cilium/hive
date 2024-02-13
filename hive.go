@@ -170,6 +170,7 @@ type defaults struct {
 	Shutdowner        Shutdowner
 	InvokerList       cell.InvokerList
 	EmptyFullModuleID cell.FullModuleID
+	DecodeHooks       cell.DecodeHooks
 }
 
 func (h *Hive) provideDefaults() error {
@@ -181,6 +182,7 @@ func (h *Hive) provideDefaults() error {
 			Shutdowner:        h,
 			InvokerList:       h,
 			EmptyFullModuleID: nil,
+			DecodeHooks:       h.opts.DecodeHooks,
 		}
 	})
 }
