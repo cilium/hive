@@ -51,4 +51,8 @@ type Health interface {
 
 	// NewScope constructs a new scoped health reporter.
 	NewScope(name string) Health
+
+	// Close closes this health scope and removes it. This is distinct from
+	// 'Stopped' in that after closing the health status will disappear completely.
+	Close()
 }

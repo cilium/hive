@@ -4,42 +4,41 @@ import (
 	"sync"
 )
 
-type SimpleHealth struct {
+type simpleHealthRoot struct {
 	sync.Mutex
+	all map[string]*SimpleHealth
+}
+
+type SimpleHealth struct {
+	*simpleHealthRoot
 
 	Scope  string
 	Level  Level
 	Status string
 	Error  error
-
-	Children map[string]*SimpleHealth
 }
 
 // NewScope implements cell.Health.
 func (h *SimpleHealth) NewScope(name string) Health {
 	h.Lock()
 	defer h.Unlock()
+
 	h2 := &SimpleHealth{
-		Scope:    name,
-		Children: make(map[string]*SimpleHealth),
+		simpleHealthRoot: h.simpleHealthRoot,
+		Scope:            h.Scope + "." + name,
 	}
-	h.Children[name] = h2
+	h.all[name] = h2
 	return h2
 }
 
-func (h *SimpleHealth) GetChild(names ...string) *SimpleHealth {
-	for _, name := range names {
-		h.Lock()
-		h2, ok := h.Children[name]
-		h.Unlock()
-		h = h2
-		ok = ok && h.Scope == name
-		if !ok {
-			return nil
-		}
-	}
-	return h
+func (h *SimpleHealth) GetChild(fullName string) *SimpleHealth {
+	h.Lock()
+	defer h.Unlock()
 
+	if child, ok := h.all[fullName]; ok {
+		return child
+	}
+	return nil
 }
 
 // Degraded implements cell.Health.
@@ -72,9 +71,18 @@ func (h *SimpleHealth) Stopped(reason string) {
 	h.Error = nil
 }
 
+func (h *SimpleHealth) Close() {
+	h.Lock()
+	defer h.Unlock()
+
+	delete(h.all, h.Scope)
+}
+
 func NewSimpleHealth() (Health, *SimpleHealth) {
 	h := &SimpleHealth{
-		Children: make(map[string]*SimpleHealth),
+		simpleHealthRoot: &simpleHealthRoot{
+			all: make(map[string]*SimpleHealth),
+		},
 	}
 	return h, h
 }
