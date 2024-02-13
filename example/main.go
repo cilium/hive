@@ -17,25 +17,30 @@ var (
 		cell.SimpleHealthCell,
 		job.Cell,
 
-		serverCell,        // An HTTP server, depends on HTTPHandler's
-		eventsCell,        // Example event source (ExampleEvents)
-		helloHandlerCell,  // Handler for /hello
-		eventsHandlerCell, // Handler for /events
+		cell.Module(
+			"example",
+			"Example application",
 
-		// Constructors are lazy and only invoked if they are a dependency
-		// to an "invoke" function or an indirect dependency of a constructor
-		// referenced in an invoke. This allows composing "bundles" of modules
-		// and then only paying for what's actually used from the bundle.
-		//
-		// Think of invoke functions as the driver that decides what things
-		// should be constructed and how they should integrate with each other.
-		//
-		// Modules that provide a service to others should usually not have any invoke
-		// functions that force object construction whether or not it is needed.
-		//
-		// In this example we have the server at the top of the dependency tree,
-		// so we'll just depend on it here to make sure it gets instantiated.
-		cell.Invoke(func(Server) {}),
+			serverCell,        // An HTTP server, depends on HTTPHandler's
+			eventsCell,        // Example event source (ExampleEvents)
+			helloHandlerCell,  // Handler for /hello
+			eventsHandlerCell, // Handler for /events
+
+			// Constructors are lazy and only invoked if they are a dependency
+			// to an "invoke" function or an indirect dependency of a constructor
+			// referenced in an invoke. This allows composing "bundles" of modules
+			// and then only paying for what's actually used from the bundle.
+			//
+			// Think of invoke functions as the driver that decides what things
+			// should be constructed and how they should integrate with each other.
+			//
+			// Modules that provide a service to others should usually not have any invoke
+			// functions that force object construction whether or not it is needed.
+			//
+			// In this example we have the server at the top of the dependency tree,
+			// so we'll just depend on it here to make sure it gets instantiated.
+			cell.Invoke(func(Server) {}),
+		),
 	)
 
 	// Define a cobra command that runs the hive.
