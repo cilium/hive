@@ -175,6 +175,15 @@ type defaults struct {
 }
 
 func (h *Hive) provideDefaults() error {
+	if h.opts.ModuleDecorator != nil {
+		err := h.container.Provide(func() cell.ModuleDecorator {
+			return cell.ModuleDecorator(h.opts.ModuleDecorator)
+		})
+		if err != nil {
+			return err
+		}
+	}
+
 	return h.container.Provide(func() defaults {
 		return defaults{
 			Flags:             h.flags,
