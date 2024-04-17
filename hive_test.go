@@ -390,7 +390,7 @@ func TestShutdown(t *testing.T) {
 
 func TestRunRollback(t *testing.T) {
 	var started, stopped int
-	opts := hive.DefaultOptions
+	opts := hive.DefaultOptions()
 	opts.StartTimeout = time.Millisecond
 	h := hive.NewWithOptions(
 		opts,
@@ -462,4 +462,36 @@ func TestSameCellMultipleHives(t *testing.T) {
 
 	require.NoError(t, h1.Stop(context.TODO()))
 	require.NoError(t, h1.Stop(context.TODO()))
+}
+
+func TestModulePrivateProvidersDecorators(t *testing.T) {
+	var intCalled bool
+	opts := hive.DefaultOptions()
+	opts.ModuleDecorators = cell.ModuleDecorators{
+		func(n int) int { intCalled = true; return n + 1 },
+		func(base string, mod cell.ModuleID) string { return base + string(mod) },
+	}
+	opts.ModulePrivateProviders = cell.ModulePrivateProviders{
+		func() float64 { return 3.1415 },
+	}
+
+	var stringContents string
+	var floatContents float64
+	h := hive.NewWithOptions(opts,
+		cell.Provide(
+			// Things to decorate
+			func() int { return 1 },
+			func() string { return "hello, " },
+		),
+		cell.Module("test", "test",
+			cell.Invoke(func(s string, f float64) {
+				stringContents = s
+				floatContents = f
+			}),
+		))
+
+	require.NoError(t, h.Populate())
+	require.Equal(t, "hello, test", stringContents)
+	require.Equal(t, 3.1415, floatContents)
+	require.False(t, intCalled, "did not expect unreferenced module decorator to be called")
 }

@@ -53,11 +53,25 @@ type RootLogger *slog.Logger
 
 // ModuleDecorator is the optional decorator function used for each module
 // to provide or replace objects in each module's scope.
-// Supplied with [hive.Options] field 'ModuleDecorator'.
+// Supplied with [hive.Options] field 'ModuleDecorators'.
 //
 // This can be used to provide module-specific instances of objects application
 // wide, similar to how *slog.Logger is provided by default.
 type ModuleDecorator any
+
+type ModuleDecorators []ModuleDecorator
+
+// ModulePrivateProvider is the optional private provide function used for each module
+// to provide objects in each module's scope.
+// Supplied with [hive.Options] field 'ModulePrivateProviders'.
+//
+// This is different from a [ModuleDecorator] in that this can be used to provide objects
+// that do not yet exist in the object graph, whereas [ModuleDecorator] requires that the
+// objects that are being decorated already exist.
+
+type ModulePrivateProvider any
+
+type ModulePrivateProviders []ModulePrivateProvider
 
 var (
 	idRegex          = regexp.MustCompile(`^[a-z][a-z0-9_\-]{1,30}$`)
@@ -114,22 +128,38 @@ func (m *module) lifecycle(lc Lifecycle, fullID FullModuleID) Lifecycle {
 	}
 }
 
-type moduleProviderParams struct {
+type moduleDecoratorParams struct {
 	In
-	ModuleDecorator ModuleDecorator `optional:"true"`
+	ModuleDecorators ModuleDecorators
 }
 
-func (m *module) moduleDecorator(scope *dig.Scope) error {
-	provide := func(p moduleProviderParams) error {
-		if p.ModuleDecorator != nil {
-			return scope.Decorate(p.ModuleDecorator)
+func (m *module) moduleDecorators(scope *dig.Scope) error {
+	provide := func(p moduleDecoratorParams) error {
+		for _, d := range p.ModuleDecorators {
+			if err := scope.Decorate(d); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
-	if err := scope.Invoke(provide); err != nil {
-		return err
+	return scope.Invoke(provide)
+}
+
+type modulePrivateProviderParams struct {
+	In
+	ModulePrivateProviders ModulePrivateProviders
+}
+
+func (m *module) modulePrivateProviders(scope *dig.Scope) error {
+	provide := func(p modulePrivateProviderParams) error {
+		for _, d := range p.ModulePrivateProviders {
+			if err := scope.Provide(d); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
-	return nil
+	return scope.Invoke(provide)
 }
 
 func (m *module) Apply(log *slog.Logger, c container) error {
@@ -151,7 +181,11 @@ func (m *module) Apply(log *slog.Logger, c container) error {
 		return err
 	}
 
-	if err := m.moduleDecorator(scope); err != nil {
+	if err := m.moduleDecorators(scope); err != nil {
+		return err
+	}
+
+	if err := m.modulePrivateProviders(scope); err != nil {
 		return err
 	}
 

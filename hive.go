@@ -30,16 +30,32 @@ type Options struct {
 	// variable "CILIUM_FOO".
 	EnvPrefix string
 
-	// ModuleDecorator is an optional decorator function to use for each
-	// module. This can be used to provide module-specific objects application
-	// wide. For example:
+	// ModuleDecorator is an optional set of decorator functions to use for each
+	// module. This can be used to provide module-scoped overrides to objects.
+	// For example:
 	//
-	// 	func(foo Foo, id cell.ModuleID) Foo {
-	// 		return foo.With("moduleID", id)
+	// 	opts.ModuleDecorators = cell.ModuleDecorators{
+	// 		func(foo Foo, id cell.ModuleID) Foo {
+	// 			return foo.With("moduleID", id)
+	//		},
 	//	}
 	//
 	// The above would give each cell within a module an augmented version of 'Foo'.
-	ModuleDecorator cell.ModuleDecorator
+	// The object that is being decorated (the return value) must already exist in
+	// the object graph.
+	ModuleDecorators cell.ModuleDecorators
+
+	// ModulePrivateProvider is an optional set of private provide functions to
+	// use for each module. This can be used to provide module-scoped objects.
+	// For example:
+	//
+	// 	opts.ModulePrivateProviders = cell.ModulePrivateProviders{
+	// 		func(id cell.ModuleID) Foo {
+	// 			return foo.New(id)
+	//		},
+	//	}
+	//
+	ModulePrivateProviders cell.ModulePrivateProviders
 
 	// DecodeHooks are optional additional decode hooks to use with cell.Config
 	// to decode a configuration flag into a config field. See existing hooks
@@ -50,12 +66,14 @@ type Options struct {
 	StopTimeout  time.Duration
 }
 
-var DefaultOptions = Options{
-	Logger:          nil, // Will use slog.Default()
-	EnvPrefix:       "",
-	ModuleDecorator: nil,
-	StartTimeout:    defaultStartTimeout,
-	StopTimeout:     defaultStopTimeout,
+func DefaultOptions() Options {
+	return Options{
+		Logger:           nil, // Will use slog.Default()
+		EnvPrefix:        "",
+		ModuleDecorators: nil,
+		StartTimeout:     defaultStartTimeout,
+		StopTimeout:      defaultStopTimeout,
+	}
 }
 
 const (
@@ -96,7 +114,7 @@ type Hive struct {
 // flags. Likewise if configuration settings come from configuration files, then
 // the Viper() method can be used to populate the hive's viper instance.
 func New(cells ...cell.Cell) *Hive {
-	return NewWithOptions(DefaultOptions, cells...)
+	return NewWithOptions(DefaultOptions(), cells...)
 }
 
 func NewWithOptions(opts Options, cells ...cell.Cell) *Hive {
@@ -164,36 +182,32 @@ func (h *Hive) Viper() *viper.Viper {
 type defaults struct {
 	dig.Out
 
-	Flags             *pflag.FlagSet
-	Lifecycle         cell.Lifecycle
-	Logger            *slog.Logger
-	RootLogger        cell.RootLogger
-	Shutdowner        Shutdowner
-	InvokerList       cell.InvokerList
-	EmptyFullModuleID cell.FullModuleID
-	DecodeHooks       cell.DecodeHooks
+	Flags                  *pflag.FlagSet
+	Lifecycle              cell.Lifecycle
+	Logger                 *slog.Logger
+	RootLogger             cell.RootLogger
+	Shutdowner             Shutdowner
+	InvokerList            cell.InvokerList
+	EmptyFullModuleID      cell.FullModuleID
+	DecodeHooks            cell.DecodeHooks
+	ModuleDecorators       cell.ModuleDecorators
+	ModulePrivateProviders cell.ModulePrivateProviders
 }
 
 func (h *Hive) provideDefaults() error {
-	if h.opts.ModuleDecorator != nil {
-		err := h.container.Provide(func() cell.ModuleDecorator {
-			return cell.ModuleDecorator(h.opts.ModuleDecorator)
-		})
-		if err != nil {
-			return err
-		}
-	}
 
 	return h.container.Provide(func() defaults {
 		return defaults{
-			Flags:             h.flags,
-			Lifecycle:         h.lifecycle,
-			Logger:            h.opts.Logger,
-			RootLogger:        cell.RootLogger(h.opts.Logger),
-			Shutdowner:        h,
-			InvokerList:       h,
-			EmptyFullModuleID: nil,
-			DecodeHooks:       h.opts.DecodeHooks,
+			Flags:                  h.flags,
+			Lifecycle:              h.lifecycle,
+			Logger:                 h.opts.Logger,
+			RootLogger:             cell.RootLogger(h.opts.Logger),
+			Shutdowner:             h,
+			InvokerList:            h,
+			EmptyFullModuleID:      nil,
+			DecodeHooks:            h.opts.DecodeHooks,
+			ModuleDecorators:       h.opts.ModuleDecorators,
+			ModulePrivateProviders: h.opts.ModulePrivateProviders,
 		}
 	})
 }
