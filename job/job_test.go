@@ -5,7 +5,9 @@ package job
 
 import (
 	"context"
+	"log/slog"
 	"runtime"
+	"runtime/pprof"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -116,4 +118,39 @@ func TestGroup_JobRuntime(t *testing.T) {
 	}, timeout, tick)
 
 	h.Stop(context.Background())
+}
+
+func TestModuleDecoratedGroup(t *testing.T) {
+	opts := hive.DefaultOptions()
+	opts.ModulePrivateProviders = cell.ModulePrivateProviders{
+		func(r Registry, h cell.Health, modID cell.FullModuleID, l *slog.Logger, lc cell.Lifecycle) Group {
+			g := r.NewGroup(h,
+				WithLogger(l),
+				WithPprofLabels(pprof.Labels("module", modID.String())))
+			lc.Append(g)
+			return g
+		},
+	}
+	callCount := 0
+	fn := func(g Group) {
+		g.Add(OneShot("test", func(ctx context.Context, health cell.Health) error {
+			callCount++
+			return nil
+		}))
+	}
+	h := hive.NewWithOptions(
+		opts,
+		cell.SimpleHealthCell,
+		Cell,
+		cell.Module("test", "test module",
+			cell.Invoke(fn),
+			cell.Module("nested", "nested module",
+				cell.Invoke(fn),
+			),
+		),
+	)
+
+	assert.NoError(t, h.Start(context.Background()))
+	assert.NoError(t, h.Stop(context.Background()))
+	assert.Equal(t, 2, callCount, "expected OneShot function to be called twice")
 }

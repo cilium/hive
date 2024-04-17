@@ -20,8 +20,10 @@ import (
 // automatic metrics collection and/or status reporting in the future.
 var Cell = cell.Module(
 	"jobs",
-	"Jobs",
-	cell.Provide(newRegistry),
+	"Managed background goroutines and timers",
+	cell.Provide(
+		newRegistry,
+	),
 )
 
 // A Registry creates Groups, it maintains references to these groups for the purposes of collecting information
