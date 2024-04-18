@@ -32,7 +32,7 @@ type InvokerList interface {
 	AppendInvoke(func() error)
 }
 
-func (inv *invoker) invoke(log *slog.Logger, cont container) error {
+func (inv *invoker) invoke(log *slog.Logger, cont container, logThreshold time.Duration) error {
 	for i := range inv.funcs {
 		nf := &inv.funcs[i]
 		log.Debug("Invoking", "function", nf.name)
@@ -53,14 +53,18 @@ func (inv *invoker) invoke(log *slog.Logger, cont container) error {
 			return err
 		}
 		d := time.Since(t0)
-		log.Info("Invoked", "duration", d, "function", nf.name)
+		if d > logThreshold {
+			log.Info("Invoked", "duration", d, "function", nf.name)
+		} else {
+			log.Debug("Invoked", "duration", d, "function", nf.name)
+		}
 	}
 	return nil
 }
 
-func (inv *invoker) Apply(log *slog.Logger, c container) error {
+func (inv *invoker) Apply(log *slog.Logger, c container, logThreshold time.Duration) error {
 	// Remember the scope in which we need to invoke.
-	invoker := func() error { return inv.invoke(log, c) }
+	invoker := func() error { return inv.invoke(log, c, logThreshold) }
 
 	// Append the invoker to the list of invoke functions. These are invoked
 	// prior to start to build up the objects. They are not invoked directly

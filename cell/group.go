@@ -3,7 +3,10 @@
 
 package cell
 
-import "log/slog"
+import (
+	"log/slog"
+	"time"
+)
 
 type group []Cell
 
@@ -13,9 +16,9 @@ func Group(cells ...Cell) Cell {
 	return group(cells)
 }
 
-func (g group) Apply(log *slog.Logger, c container) error {
+func (g group) Apply(log *slog.Logger, c container, logThreshold time.Duration) error {
 	for _, cell := range g {
-		if err := cell.Apply(log, c); err != nil {
+		if err := cell.Apply(log, c, logThreshold); err != nil {
 			return err
 		}
 	}

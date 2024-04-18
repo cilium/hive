@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"go.uber.org/dig"
 
@@ -23,7 +24,7 @@ type provider struct {
 	export  bool
 }
 
-func (p *provider) Apply(log *slog.Logger, c container) error {
+func (p *provider) Apply(log *slog.Logger, c container, logThreshold time.Duration) error {
 	// Since the same Provide cell may be used multiple times
 	// in different hives we use a mutex to protect it and we
 	// fill the provide info only the first time.

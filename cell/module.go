@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"go.uber.org/dig"
 )
@@ -162,7 +163,7 @@ func (m *module) modulePrivateProviders(scope *dig.Scope) error {
 	return scope.Invoke(provide)
 }
 
-func (m *module) Apply(log *slog.Logger, c container) error {
+func (m *module) Apply(log *slog.Logger, c container, logThreshold time.Duration) error {
 	scope := c.Scope(m.id)
 
 	// Provide ModuleID and FullModuleID in the module's scope.
@@ -190,7 +191,7 @@ func (m *module) Apply(log *slog.Logger, c container) error {
 	}
 
 	for _, cell := range m.cells {
-		if err := cell.Apply(log, scope); err != nil {
+		if err := cell.Apply(log, scope, logThreshold); err != nil {
 			return err
 		}
 	}

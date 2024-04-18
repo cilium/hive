@@ -66,6 +66,8 @@ type DefaultLifecycle struct {
 	mu         sync.Mutex
 	hooks      []augmentedHook
 	numStarted int
+
+	LogThreshold time.Duration
 }
 
 type augmentedHook struct {
@@ -107,7 +109,11 @@ func (lc *DefaultLifecycle) Start(log *slog.Logger, ctx context.Context) error {
 			return err
 		}
 		d := time.Since(t0)
-		l.Info("Start hook executed", "duration", d)
+		if d > lc.LogThreshold {
+			l.Info("Start hook executed", "duration", d)
+		} else {
+			l.Debug("Start hook executed", "duration", d)
+		}
 		lc.numStarted++
 	}
 	return nil
@@ -142,7 +148,11 @@ func (lc *DefaultLifecycle) Stop(log *slog.Logger, ctx context.Context) error {
 			errs = errors.Join(errs, err)
 		} else {
 			d := time.Since(t0)
-			l.Info("Stop hook executed", "duration", d)
+			if d > lc.LogThreshold {
+				l.Info("Stop hook executed", "duration", d)
+			} else {
+				l.Debug("Stop hook executed", "duration", d)
+			}
 		}
 	}
 	return errs
