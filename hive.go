@@ -64,6 +64,12 @@ type Options struct {
 
 	StartTimeout time.Duration
 	StopTimeout  time.Duration
+
+	// LogThreshold is an optional threshold to reduce logging verbosity.
+	// When an Invoke or Lifecycle Start/Stop hook takes longer than this
+	// threshold, it will be logged at Info level. Otherwise it is logged
+	// at Debug level.
+	LogThreshold time.Duration
 }
 
 func DefaultOptions() Options {
@@ -73,6 +79,7 @@ func DefaultOptions() Options {
 		ModuleDecorators: nil,
 		StartTimeout:     defaultStartTimeout,
 		StopTimeout:      defaultStopTimeout,
+		LogThreshold:     defaultLogThreshold,
 	}
 }
 
@@ -83,6 +90,8 @@ const (
 
 	// defaultStopTimeout is the amount of time allotted for stop hooks.
 	defaultStopTimeout = time.Minute
+
+	defaultLogThreshold = time.Duration(0)
 )
 
 // Hive is a framework building modular applications.
@@ -122,13 +131,15 @@ func NewWithOptions(opts Options, cells ...cell.Cell) *Hive {
 		opts.Logger = slog.Default()
 	}
 	h := &Hive{
-		log:             opts.Logger,
-		opts:            opts,
-		container:       dig.New(),
-		cells:           cells,
-		viper:           viper.New(),
-		flags:           pflag.NewFlagSet("", pflag.ContinueOnError),
-		lifecycle:       &cell.DefaultLifecycle{},
+		log:       opts.Logger,
+		opts:      opts,
+		container: dig.New(),
+		cells:     cells,
+		viper:     viper.New(),
+		flags:     pflag.NewFlagSet("", pflag.ContinueOnError),
+		lifecycle: &cell.DefaultLifecycle{
+			LogThreshold: opts.LogThreshold,
+		},
 		shutdown:        make(chan error, 1),
 		configOverrides: nil,
 	}
@@ -141,7 +152,7 @@ func NewWithOptions(opts Options, cells ...cell.Cell) *Hive {
 	// and adds all config flags. Invokes are delayed until Start() is
 	// called.
 	for _, cell := range cells {
-		if err := cell.Apply(opts.Logger, h.container); err != nil {
+		if err := cell.Apply(opts.Logger, h.container, opts.LogThreshold); err != nil {
 			panic(fmt.Sprintf("Failed to apply cell: %s", err))
 		}
 	}

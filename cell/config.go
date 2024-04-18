@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/cilium/hive/internal"
 	"github.com/mitchellh/mapstructure"
@@ -145,7 +146,7 @@ func decoderConfig(target any, extraHooks DecodeHooks) *mapstructure.DecoderConf
 	}
 }
 
-func (c *config[Cfg]) Apply(log *slog.Logger, cont container) error {
+func (c *config[Cfg]) Apply(log *slog.Logger, cont container, logThreshold time.Duration) error {
 	// Register the flags to the global set of all flags.
 	err := cont.Invoke(
 		func(allFlags *pflag.FlagSet) {
