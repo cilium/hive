@@ -5,8 +5,6 @@ package cell
 
 import (
 	"fmt"
-	"log/slog"
-	"time"
 
 	"github.com/cilium/hive/internal"
 )
@@ -40,14 +38,14 @@ type decorator struct {
 	cells     []Cell
 }
 
-func (d *decorator) Apply(log *slog.Logger, c container, logThreshold time.Duration) error {
+func (d *decorator) Apply(c container) error {
 	scope := c.Scope(fmt.Sprintf("(decorate %s)", internal.PrettyType(d.decorator)))
 	if err := scope.Decorate(d.decorator); err != nil {
 		return err
 	}
 
 	for _, cell := range d.cells {
-		if err := cell.Apply(log, scope, logThreshold); err != nil {
+		if err := cell.Apply(scope); err != nil {
 			return err
 		}
 	}

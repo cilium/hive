@@ -17,6 +17,7 @@ import (
 
 	"github.com/cilium/hive"
 	"github.com/cilium/hive/cell"
+	"github.com/cilium/hive/hivetest"
 )
 
 // Configure a generous timeout to prevent flakes when running in a noisy CI environment.
@@ -57,7 +58,7 @@ func TestRegistry(t *testing.T) {
 		g1 = r.NewGroup(s)
 		g2 = r.NewGroup(s)
 	})
-	h.Populate()
+	h.Populate(hivetest.Logger(t))
 
 	if r1.(*registry).groups[0] != g1 {
 		t.Fail()
@@ -87,7 +88,7 @@ func TestGroup_JobQueue(t *testing.T) {
 		l.Append(g)
 	})
 
-	h.Populate()
+	h.Populate(hivetest.Logger(t))
 }
 
 // This test asserts that jobs can be added at runtime.
@@ -104,7 +105,7 @@ func TestGroup_JobRuntime(t *testing.T) {
 		l.Append(g)
 	})
 
-	h.Start(context.Background())
+	h.Start(slog.Default(), context.Background())
 
 	done := make(chan struct{})
 	g.Add(OneShot("runtime", func(ctx context.Context, health cell.Health) error {
@@ -117,7 +118,7 @@ func TestGroup_JobRuntime(t *testing.T) {
 		assert.Equal(c, int32(1), i.Load())
 	}, timeout, tick)
 
-	h.Stop(context.Background())
+	h.Stop(slog.Default(), context.Background())
 }
 
 func TestModuleDecoratedGroup(t *testing.T) {
@@ -150,7 +151,8 @@ func TestModuleDecoratedGroup(t *testing.T) {
 		),
 	)
 
-	assert.NoError(t, h.Start(context.Background()))
-	assert.NoError(t, h.Stop(context.Background()))
+	log := slog.Default()
+	assert.NoError(t, h.Start(log, context.Background()))
+	assert.NoError(t, h.Stop(log, context.Background()))
 	assert.Equal(t, 2, callCount, "expected OneShot function to be called twice")
 }

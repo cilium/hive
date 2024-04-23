@@ -16,6 +16,7 @@ import (
 
 	"github.com/cilium/hive"
 	"github.com/cilium/hive/cell"
+	"github.com/cilium/hive/hivetest"
 )
 
 type Config struct {
@@ -48,10 +49,11 @@ func TestHiveGoodConfig(t *testing.T) {
 	flags.Set("foo", "test")
 	hive.Viper().Set("bar", 13)
 
-	err := hive.Start(context.TODO())
+	log := hivetest.Logger(t)
+	err := hive.Start(log, context.TODO())
 	assert.NoError(t, err, "expected Start to succeed")
 
-	err = hive.Stop(context.TODO())
+	err = hive.Stop(log, context.TODO())
 	assert.NoError(t, err, "expected Stop to succeed")
 
 	assert.Equal(t, "test", cfg.Foo, "Config.Foo not set correctly")
@@ -78,7 +80,7 @@ func TestHiveBadConfig(t *testing.T) {
 
 	hive := hive.New(testCell)
 
-	err := hive.Start(context.TODO())
+	err := hive.Start(hivetest.Logger(t), context.TODO())
 	assert.ErrorContains(t, err, "has invalid keys: foo", "expected 'invalid keys' error")
 	assert.ErrorContains(t, err, "has unset fields: Bar", "expected 'unset fields' error")
 }
@@ -108,10 +110,11 @@ func TestHiveConfigOverride(t *testing.T) {
 	// Set "foo" flag via Viper. This should be ignored.
 	h.Viper().Set("foo", "viper")
 
-	err := h.Start(context.TODO())
+	log := hivetest.Logger(t)
+	err := h.Start(log, context.TODO())
 	assert.NoError(t, err, "expected Start to succeed")
 
-	err = h.Stop(context.TODO())
+	err = h.Stop(log, context.TODO())
 	assert.NoError(t, err, "expected Stop to succeed")
 
 	assert.Equal(t, "override", cfg.Foo, "Config.Foo not set correctly")
@@ -176,9 +179,10 @@ func TestHiveStringSlice(t *testing.T) {
 			"commas-map": commas,
 		})
 
-	err := hive.Start(context.TODO())
+	log := hivetest.Logger(t)
+	err := hive.Start(log, context.TODO())
 	require.NoError(t, err, "expected Start to succeed")
-	err = hive.Stop(context.TODO())
+	err = hive.Stop(log, context.TODO())
 	require.NoError(t, err, "expected Stop to succeed")
 
 	assert.ElementsMatch(t, cfg.SpacesFlag, expected, "unexpected SpacesFlag")
@@ -210,7 +214,7 @@ func TestProvideInvoke(t *testing.T) {
 	err := hive.New(
 		testCell,
 		shutdownOnStartCell,
-	).Run()
+	).Run(hivetest.Logger(t))
 	assert.NoError(t, err, "expected Run to succeed")
 
 	assert.True(t, invoked, "expected invoke to be called, but it was not")
@@ -242,7 +246,7 @@ func TestModuleID(t *testing.T) {
 	err := hive.New(
 		outer,
 		shutdownOnStartCell,
-	).Run()
+	).Run(hivetest.Logger(t))
 	assert.NoError(t, err, "expected Run to succeed")
 
 	assert.True(t, invoked, "expected invoke to be called, but it was not")
@@ -259,7 +263,7 @@ func TestGroup(t *testing.T) {
 		testCell,
 		cell.Invoke(func(a *SomeObject, b *OtherObject) { sum = a.X + b.Y }),
 		shutdownOnStartCell,
-	).Run()
+	).Run(hivetest.Logger(t))
 	assert.NoError(t, err, "expected Run to succeed")
 	assert.Equal(t, 15, sum)
 }
@@ -278,7 +282,7 @@ func TestProvidePrivate(t *testing.T) {
 	err := hive.New(
 		testCell,
 		shutdownOnStartCell,
-	).Run()
+	).Run(hivetest.Logger(t))
 	assert.NoError(t, err, "expected Start to succeed")
 
 	if !invoked {
@@ -291,7 +295,7 @@ func TestProvidePrivate(t *testing.T) {
 		cell.Invoke(func(*SomeObject) {}),
 		shutdownOnStartCell,
 	)
-	err = h.Start(context.TODO())
+	err = h.Start(hivetest.Logger(t), context.TODO())
 	assert.ErrorContains(t, err, "missing type: *hive_test.SomeObject", "expected Start to fail to find *SomeObject")
 }
 
@@ -328,7 +332,7 @@ func TestDecorate(t *testing.T) {
 		shutdownOnStartCell,
 	)
 
-	assert.NoError(t, hive.Run(), "expected Run() to succeed")
+	assert.NoError(t, hive.Run(hivetest.Logger(t)), "expected Run() to succeed")
 	assert.True(t, invoked, "expected decorated invoke function to be called")
 }
 
@@ -347,7 +351,7 @@ func TestShutdown(t *testing.T) {
 				}})
 		}),
 	)
-	assert.NoError(t, h.Run(), "expected Run() to succeed")
+	assert.NoError(t, h.Run(hivetest.Logger(t)), "expected Run() to succeed")
 
 	// Test from a goroutine forked from start hook
 	h = hive.New(
@@ -359,7 +363,7 @@ func TestShutdown(t *testing.T) {
 				}})
 		}),
 	)
-	assert.NoError(t, h.Run(), "expected Run() to succeed")
+	assert.NoError(t, h.Run(hivetest.Logger(t)), "expected Run() to succeed")
 
 	// Test from an invoke. Shouldn't really be used, but should still work.
 	h = hive.New(
@@ -367,7 +371,7 @@ func TestShutdown(t *testing.T) {
 			shutdowner.Shutdown()
 		}),
 	)
-	assert.NoError(t, h.Run(), "expected Run() to succeed")
+	assert.NoError(t, h.Run(hivetest.Logger(t)), "expected Run() to succeed")
 
 	//
 	// Unhappy paths that fatal with an error:
@@ -385,7 +389,7 @@ func TestShutdown(t *testing.T) {
 				}})
 		}),
 	)
-	assert.ErrorIs(t, h.Run(), shutdownErr, "expected Run() to fail with shutdownErr")
+	assert.ErrorIs(t, h.Run(hivetest.Logger(t)), shutdownErr, "expected Run() to fail with shutdownErr")
 }
 
 func TestRunRollback(t *testing.T) {
@@ -420,7 +424,7 @@ func TestRunRollback(t *testing.T) {
 		}),
 	)
 
-	err := h.Run()
+	err := h.Run(hivetest.Logger(t))
 	assert.ErrorIs(t, err, context.DeadlineExceeded, "expected Run() to fail with timeout")
 
 	// We should see 2 start hooks invoked, and then 1 stop hook as first
@@ -453,15 +457,16 @@ func TestSameCellMultipleHives(t *testing.T) {
 	h1 := hive.New(common, cell.Provide(func() string { return "foo" }))
 	h2 := hive.New(common, cell.Provide(func() string { return "bar" }))
 
-	require.NoError(t, h1.Start(context.TODO()))
+	log := hivetest.Logger(t)
+	require.NoError(t, h1.Start(log, context.TODO()))
 	require.Equal(t, "foo", got1)
 	require.Equal(t, 10, got2)
-	require.NoError(t, h2.Start(context.TODO()))
+	require.NoError(t, h2.Start(log, context.TODO()))
 	require.Equal(t, "bar", got1)
 	require.Equal(t, 10, got2)
 
-	require.NoError(t, h1.Stop(context.TODO()))
-	require.NoError(t, h1.Stop(context.TODO()))
+	require.NoError(t, h1.Stop(log, context.TODO()))
+	require.NoError(t, h1.Stop(log, context.TODO()))
 }
 
 func TestModulePrivateProvidersDecorators(t *testing.T) {
@@ -490,7 +495,7 @@ func TestModulePrivateProvidersDecorators(t *testing.T) {
 			}),
 		))
 
-	require.NoError(t, h.Populate())
+	require.NoError(t, h.Populate(hivetest.Logger(t)))
 	require.Equal(t, "hello, test", stringContents)
 	require.Equal(t, 3.1415, floatContents)
 	require.False(t, intCalled, "did not expect unreferenced module decorator to be called")
