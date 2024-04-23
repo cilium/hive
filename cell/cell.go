@@ -4,9 +4,6 @@
 package cell
 
 import (
-	"log/slog"
-	"time"
-
 	"go.uber.org/dig"
 )
 
@@ -24,7 +21,7 @@ type Cell interface {
 	Info(container) Info
 
 	// Apply the cell to the dependency graph container.
-	Apply(*slog.Logger, container, time.Duration) error
+	Apply(container) error
 }
 
 // In when embedded into a struct used as constructor parameter makes the exported

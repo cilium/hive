@@ -3,11 +3,6 @@
 
 package cell
 
-import (
-	"log/slog"
-	"time"
-)
-
 type group []Cell
 
 // Group a set of cells. Unlike Module(), Group() does not create a new
@@ -16,9 +11,9 @@ func Group(cells ...Cell) Cell {
 	return group(cells)
 }
 
-func (g group) Apply(log *slog.Logger, c container, logThreshold time.Duration) error {
+func (g group) Apply(c container) error {
 	for _, cell := range g {
-		if err := cell.Apply(log, c, logThreshold); err != nil {
+		if err := cell.Apply(c); err != nil {
 			return err
 		}
 	}

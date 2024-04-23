@@ -4,6 +4,8 @@
 package main
 
 import (
+	"log/slog"
+
 	"github.com/spf13/cobra"
 
 	"github.com/cilium/hive"
@@ -53,7 +55,7 @@ var (
 			// and then constructs all objects, followed by executing the start
 			// hooks in dependency order. It will then block waiting for signals
 			// after which it will run the stop hooks in reverse order.
-			if err := Hive.Run(); err != nil {
+			if err := Hive.Run(slog.Default()); err != nil {
 				// Run() can fail if:
 				// - There are missing types in the object graph
 				// - Executing the lifecycle start or stop hooks fails

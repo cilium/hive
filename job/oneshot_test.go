@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/cilium/hive/cell"
+	"github.com/cilium/hive/hivetest"
 )
 
 // This test asserts that a OneShot jobs is started and completes. This test will timeout on failure
@@ -33,9 +34,10 @@ func TestOneShot_ShortRun(t *testing.T) {
 		l.Append(g)
 	})
 
-	if assert.NoError(t, h.Start(context.Background())) {
+	log := hivetest.Logger(t)
+	if assert.NoError(t, h.Start(log, context.Background())) {
 		<-stop
-		assert.NoError(t, h.Stop(context.Background()))
+		assert.NoError(t, h.Stop(log, context.Background()))
 	}
 }
 
@@ -61,9 +63,10 @@ func TestOneShot_LongRun(t *testing.T) {
 		l.Append(g)
 	})
 
-	if assert.NoError(t, h.Start(context.Background())) {
+	log := hivetest.Logger(t)
+	if assert.NoError(t, h.Start(log, context.Background())) {
 		<-started
-		assert.NoError(t, h.Stop(context.Background()))
+		assert.NoError(t, h.Stop(log, context.Background()))
 		<-stopped
 	}
 }
@@ -93,14 +96,15 @@ func TestOneShot_RetryFail(t *testing.T) {
 		l.Append(g)
 	})
 
-	if err := h.Start(context.Background()); err != nil {
+	log := hivetest.Logger(t)
+	if err := h.Start(log, context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
 	// Continue as soon as all jobs stopped
 	g.(*group).wg.Wait()
 
-	if err := h.Stop(context.Background()); err != nil {
+	if err := h.Stop(log, context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -116,7 +120,7 @@ func TestOneShot_RetryBackoff(t *testing.T) {
 	t.Parallel()
 
 	for i := 0; i < 5; i++ {
-		failed, err := testOneShot_RetryBackoff()
+		failed, err := testOneShot_RetryBackoff(t)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -129,7 +133,7 @@ func TestOneShot_RetryBackoff(t *testing.T) {
 }
 
 // This test asserts that the one shot jobs have a delay equal to the expected behavior of the passed in ratelimiter.
-func testOneShot_RetryBackoff() (bool, error) {
+func testOneShot_RetryBackoff(t *testing.T) (bool, error) {
 	var (
 		g     Group
 		i     int
@@ -159,14 +163,15 @@ func testOneShot_RetryBackoff() (bool, error) {
 		l.Append(g)
 	})
 
-	if err := h.Start(context.Background()); err != nil {
+	log := hivetest.Logger(t)
+	if err := h.Start(log, context.Background()); err != nil {
 		return true, err
 	}
 
 	// Continue as soon as all jobs stopped
 	g.(*group).wg.Wait()
 
-	if err := h.Stop(context.Background()); err != nil {
+	if err := h.Stop(log, context.Background()); err != nil {
 		return true, err
 	}
 
@@ -219,14 +224,15 @@ func TestOneShot_RetryRecover(t *testing.T) {
 		l.Append(g)
 	})
 
-	if err := h.Start(context.Background()); err != nil {
+	log := hivetest.Logger(t)
+	if err := h.Start(log, context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
 	// Continue as soon as all jobs stopped
 	g.(*group).wg.Wait()
 
-	if err := h.Stop(context.Background()); err != nil {
+	if err := h.Stop(log, context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -252,7 +258,7 @@ func TestOneShot_Shutdown(t *testing.T) {
 		l.Append(g)
 	})
 
-	err := h.Run()
+	err := h.Run(hivetest.Logger(t))
 	if !errors.Is(err, targetErr) {
 		t.Fail()
 	}
@@ -282,7 +288,7 @@ func TestOneShot_RetryFailShutdown(t *testing.T) {
 		l.Append(g)
 	})
 
-	err := h.Run()
+	err := h.Run(hivetest.Logger(t))
 	if !errors.Is(err, targetErr) {
 		t.Fail()
 	}
@@ -335,7 +341,7 @@ func TestOneShot_RetryRecoverNoShutdown(t *testing.T) {
 		close(shutdown)
 	}()
 
-	err := h.Run()
+	err := h.Run(hivetest.Logger(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,7 +393,7 @@ func TestOneShot_RetryWhileShuttingDown(t *testing.T) {
 		close(shutdown)
 	}()
 
-	assert.NoError(t, h.Run())
+	assert.NoError(t, h.Run(hivetest.Logger(t)))
 	assert.Equal(t, 1, runs, "The job function should not have been retried after that the context expired")
 
 	<-shutdown

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/cilium/hive/cell"
+	"github.com/cilium/hive/hivetest"
 	"github.com/cilium/stream"
 )
 
@@ -35,14 +36,15 @@ func TestObserver_ShortStream(t *testing.T) {
 		l.Append(g)
 	})
 
-	if err := h.Start(context.Background()); err != nil {
+	log := hivetest.Logger(t)
+	if err := h.Start(log, context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
 	// Continue as soon as all jobs stopped
 	g.(*group).wg.Wait()
 
-	if err := h.Stop(context.Background()); err != nil {
+	if err := h.Stop(log, context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -76,11 +78,12 @@ func TestObserver_LongStream(t *testing.T) {
 		l.Append(g)
 	})
 
-	if err := h.Start(context.Background()); err != nil {
+	log := hivetest.Logger(t)
+	if err := h.Start(log, context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := h.Stop(context.Background()); err != nil {
+	if err := h.Stop(log, context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -115,13 +118,14 @@ func TestObserver_CtxClose(t *testing.T) {
 		l.Append(g)
 	})
 
-	if err := h.Start(context.Background()); err != nil {
+	log := hivetest.Logger(t)
+	if err := h.Start(log, context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
 	<-started
 
-	if err := h.Stop(context.Background()); err != nil {
+	if err := h.Stop(log, context.Background()); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -29,7 +29,7 @@ type namedFunc struct {
 }
 
 type InvokerList interface {
-	AppendInvoke(func() error)
+	AppendInvoke(func(*slog.Logger, time.Duration) error)
 }
 
 func (inv *invoker) invoke(log *slog.Logger, cont container, logThreshold time.Duration) error {
@@ -62,9 +62,9 @@ func (inv *invoker) invoke(log *slog.Logger, cont container, logThreshold time.D
 	return nil
 }
 
-func (inv *invoker) Apply(log *slog.Logger, c container, logThreshold time.Duration) error {
+func (inv *invoker) Apply(c container) error {
 	// Remember the scope in which we need to invoke.
-	invoker := func() error { return inv.invoke(log, c, logThreshold) }
+	invoker := func(log *slog.Logger, logThreshold time.Duration) error { return inv.invoke(log, c, logThreshold) }
 
 	// Append the invoker to the list of invoke functions. These are invoked
 	// prior to start to build up the objects. They are not invoked directly

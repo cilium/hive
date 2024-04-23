@@ -23,8 +23,6 @@ import (
 )
 
 type Options struct {
-	Logger *slog.Logger
-
 	// EnvPrefix is the prefix to use for environment variables, e.g.
 	// with prefix "CILIUM" the flag "foo" can be set with environment
 	// variable "CILIUM_FOO".
@@ -74,7 +72,6 @@ type Options struct {
 
 func DefaultOptions() Options {
 	return Options{
-		Logger:           nil, // Will use slog.Default()
 		EnvPrefix:        "",
 		ModuleDecorators: nil,
 		StartTimeout:     defaultStartTimeout,
@@ -100,7 +97,6 @@ const (
 //
 // See pkg/hive/example for a runnable example application.
 type Hive struct {
-	log             *slog.Logger
 	opts            Options
 	container       *dig.Container
 	cells           []cell.Cell
@@ -109,7 +105,7 @@ type Hive struct {
 	viper           *viper.Viper
 	lifecycle       cell.Lifecycle
 	populated       bool
-	invokes         []func() error
+	invokes         []func(*slog.Logger, time.Duration) error
 	configOverrides []any
 }
 
@@ -127,11 +123,7 @@ func New(cells ...cell.Cell) *Hive {
 }
 
 func NewWithOptions(opts Options, cells ...cell.Cell) *Hive {
-	if opts.Logger == nil {
-		opts.Logger = slog.Default()
-	}
 	h := &Hive{
-		log:       opts.Logger,
 		opts:      opts,
 		container: dig.New(),
 		cells:     cells,
@@ -152,7 +144,7 @@ func NewWithOptions(opts Options, cells ...cell.Cell) *Hive {
 	// and adds all config flags. Invokes are delayed until Start() is
 	// called.
 	for _, cell := range cells {
-		if err := cell.Apply(opts.Logger, h.container, opts.LogThreshold); err != nil {
+		if err := cell.Apply(h.container); err != nil {
 			panic(fmt.Sprintf("Failed to apply cell: %s", err))
 		}
 	}
@@ -195,8 +187,6 @@ type defaults struct {
 
 	Flags                  *pflag.FlagSet
 	Lifecycle              cell.Lifecycle
-	Logger                 *slog.Logger
-	RootLogger             cell.RootLogger
 	Shutdowner             Shutdowner
 	InvokerList            cell.InvokerList
 	EmptyFullModuleID      cell.FullModuleID
@@ -211,8 +201,6 @@ func (h *Hive) provideDefaults() error {
 		return defaults{
 			Flags:                  h.flags,
 			Lifecycle:              h.lifecycle,
-			Logger:                 h.opts.Logger,
-			RootLogger:             cell.RootLogger(h.opts.Logger),
 			Shutdowner:             h,
 			InvokerList:            h,
 			EmptyFullModuleID:      nil,
@@ -233,36 +221,36 @@ func AddConfigOverride[Cfg cell.Flagger](h *Hive, override func(*Cfg)) {
 
 // Run populates the cell configurations and runs the hive cells.
 // Interrupt signal or call to Shutdowner.Shutdown() will cause the hive to stop.
-func (h *Hive) Run() error {
+func (h *Hive) Run(log *slog.Logger) error {
 	startCtx, cancel := context.WithTimeout(context.Background(), h.opts.StartTimeout)
 	defer cancel()
 
 	var errs error
-	if err := h.Start(startCtx); err != nil {
+	if err := h.Start(log, startCtx); err != nil {
 		errs = errors.Join(errs, fmt.Errorf("failed to start: %w", err))
 	}
 
 	// If start was successful, wait for Shutdown() or interrupt.
 	if errs == nil {
-		errs = errors.Join(errs, h.waitForSignalOrShutdown())
+		errs = errors.Join(errs, h.waitForSignalOrShutdown(log))
 	}
 
 	stopCtx, cancel := context.WithTimeout(context.Background(), h.opts.StopTimeout)
 	defer cancel()
 
-	if err := h.Stop(stopCtx); err != nil {
+	if err := h.Stop(log, stopCtx); err != nil {
 		errs = errors.Join(errs, fmt.Errorf("failed to stop: %w", err))
 	}
 	return errs
 }
 
-func (h *Hive) waitForSignalOrShutdown() error {
+func (h *Hive) waitForSignalOrShutdown(log *slog.Logger) error {
 	signals := make(chan os.Signal, 1)
 	defer signal.Stop(signals)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	select {
 	case sig := <-signals:
-		h.log.Info("Signal received", "signal", sig)
+		log.Info("Signal received", "signal", sig)
 		return nil
 	case err := <-h.shutdown:
 		return err
@@ -271,7 +259,7 @@ func (h *Hive) waitForSignalOrShutdown() error {
 
 // Populate instantiates the hive. Use for testing that the hive can
 // be instantiated.
-func (h *Hive) Populate() error {
+func (h *Hive) Populate(log *slog.Logger) error {
 	if h.populated {
 		return nil
 	}
@@ -281,6 +269,16 @@ func (h *Hive) Populate() error {
 	err := h.container.Provide(
 		func() cell.AllSettings {
 			return cell.AllSettings(h.viper.AllSettings())
+		})
+	if err != nil {
+		return err
+	}
+	// Provide the user-provide logging infrastructure. This happens here so
+	// that the hive can be created prior to having to lock down the logging
+	// configuration.
+	err = h.container.Provide(
+		func() (*slog.Logger, cell.RootLogger) {
+			return log, cell.RootLogger(log)
 		})
 	if err != nil {
 		return err
@@ -315,34 +313,34 @@ func (h *Hive) Populate() error {
 
 	// Execute the invoke functions to construct the objects.
 	for _, invoke := range h.invokes {
-		if err := invoke(); err != nil {
+		if err := invoke(log, h.opts.LogThreshold); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (h *Hive) AppendInvoke(invoke func() error) {
+func (h *Hive) AppendInvoke(invoke func(*slog.Logger, time.Duration) error) {
 	h.invokes = append(h.invokes, invoke)
 }
 
 // Start starts the hive. The context allows cancelling the start.
 // If context is cancelled and the start hooks do not respect the cancellation
 // then after 5 more seconds the process will be terminated forcefully.
-func (h *Hive) Start(ctx context.Context) error {
-	if err := h.Populate(); err != nil {
+func (h *Hive) Start(log *slog.Logger, ctx context.Context) error {
+	if err := h.Populate(log); err != nil {
 		return err
 	}
 
 	defer close(h.fatalOnTimeout(ctx))
 
-	h.log.Info("Starting")
+	log.Info("Starting")
 	start := time.Now()
-	err := h.lifecycle.Start(h.log, ctx)
+	err := h.lifecycle.Start(log, ctx)
 	if err == nil {
-		h.log.Info("Started", "duration", time.Since(start))
+		log.Info("Started", "duration", time.Since(start))
 	} else {
-		h.log.Error("Start failed", "error", err, "duration", time.Since(start))
+		log.Error("Start failed", "error", err, "duration", time.Since(start))
 	}
 	return err
 }
@@ -350,10 +348,10 @@ func (h *Hive) Start(ctx context.Context) error {
 // Stop stops the hive. The context allows cancelling the stop.
 // If context is cancelled and the stop hooks do not respect the cancellation
 // then after 5 more seconds the process will be terminated forcefully.
-func (h *Hive) Stop(ctx context.Context) error {
+func (h *Hive) Stop(log *slog.Logger, ctx context.Context) error {
 	defer close(h.fatalOnTimeout(ctx))
-	h.log.Info("Stopping")
-	return h.lifecycle.Stop(h.log, ctx)
+	log.Info("Stopping")
+	return h.lifecycle.Stop(log, ctx)
 }
 
 func (h *Hive) fatalOnTimeout(ctx context.Context) chan struct{} {
@@ -394,7 +392,7 @@ func (h *Hive) Shutdown(opts ...ShutdownOption) {
 }
 
 func (h *Hive) PrintObjects() {
-	if err := h.Populate(); err != nil {
+	if err := h.Populate(slog.Default()); err != nil {
 		panic(fmt.Sprintf("Failed to populate object graph: %s", err))
 	}
 
@@ -408,7 +406,7 @@ func (h *Hive) PrintObjects() {
 }
 
 func (h *Hive) PrintDotGraph() {
-	if err := h.Populate(); err != nil {
+	if err := h.Populate(slog.Default()); err != nil {
 		panic(fmt.Sprintf("Failed to populate object graph: %s", err))
 	}
 

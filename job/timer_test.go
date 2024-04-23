@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cilium/hive/cell"
+	"github.com/cilium/hive/hivetest"
 )
 
 // This test ensures that the timer function is called repeatedly.
@@ -38,13 +39,14 @@ func TestTimer_OnInterval(t *testing.T) {
 		l.Append(g)
 	})
 
-	if err := h.Start(context.Background()); err != nil {
+	log := hivetest.Logger(t)
+	if err := h.Start(log, context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
 	<-stop
 
-	if err := h.Stop(context.Background()); err != nil {
+	if err := h.Stop(log, context.Background()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -75,7 +77,8 @@ func TestTimer_Trigger(t *testing.T) {
 		l.Append(g)
 	})
 
-	if err := h.Start(context.Background()); err != nil {
+	log := hivetest.Logger(t)
+	if err := h.Start(log, context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -88,7 +91,7 @@ func TestTimer_Trigger(t *testing.T) {
 	trigger.Trigger()
 	<-ran
 
-	if err := h.Stop(context.Background()); err != nil {
+	if err := h.Stop(log, context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -132,13 +135,14 @@ func TestTimer_DoubleTrigger(t *testing.T) {
 	trigger.Trigger()
 	trigger.Trigger()
 
-	if err := h.Start(context.Background()); err != nil {
+	log := hivetest.Logger(t)
+	if err := h.Start(log, context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
 	<-ran
 
-	if err := h.Stop(context.Background()); err != nil {
+	if err := h.Stop(log, context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -165,11 +169,12 @@ func TestTimer_ExitOnClose(t *testing.T) {
 		l.Append(g)
 	})
 
-	if err := h.Start(context.Background()); err != nil {
+	log := hivetest.Logger(t)
+	if err := h.Start(log, context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := h.Stop(context.Background()); err != nil {
+	if err := h.Stop(log, context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -202,13 +207,14 @@ func TestTimer_ExitOnCloseFnCtx(t *testing.T) {
 		l.Append(g)
 	})
 
-	if err := h.Start(context.Background()); err != nil {
+	log := hivetest.Logger(t)
+	if err := h.Start(log, context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
 	<-started
 
-	if err := h.Stop(context.Background()); err != nil {
+	if err := h.Stop(log, context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
