@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -499,4 +501,27 @@ func TestModulePrivateProvidersDecorators(t *testing.T) {
 	require.Equal(t, "hello, test", stringContents)
 	require.Equal(t, 3.1415, floatContents)
 	require.False(t, intCalled, "did not expect unreferenced module decorator to be called")
+}
+
+// Test_Regression_Parallel_Config is a (-race) regression test for parallel use of cell.Config.
+// pflag.FlagSet is keen on mutating things, even AddFlag() mutates the flag passed to it.
+func Test_Regression_Parallel_Config(t *testing.T) {
+	testCell := cell.Module(
+		"test",
+		"Test Module",
+		cell.Config(Config{}),
+	)
+	var wg sync.WaitGroup
+	wg.Add(10)
+	for i := 0; i < 10; i++ {
+		go func() {
+			defer wg.Done()
+
+			hive := hive.New(testCell)
+			log := hivetest.Logger(t, hivetest.LogLevel(slog.LevelError))
+			require.NoError(t, hive.Start(log, context.TODO()))
+			require.NoError(t, hive.Stop(log, context.TODO()))
+		}()
+	}
+	wg.Wait()
 }

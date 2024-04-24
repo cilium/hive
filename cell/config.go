@@ -21,9 +21,7 @@ import (
 // injection by Hive.Run(). The underlying mechanism for populating the struct
 // is viper's Unmarshal().
 func Config[Cfg Flagger](def Cfg) Cell {
-	c := &config[Cfg]{defaultConfig: def, flags: pflag.NewFlagSet("", pflag.ContinueOnError)}
-	def.Flags(c.flags)
-	return c
+	return &config[Cfg]{defaultConfig: def}
 }
 
 // Flagger is implemented by configuration structs to provide configuration
@@ -48,7 +46,6 @@ type Flagger interface {
 // flags and provides the parsed config to the hive.
 type config[Cfg Flagger] struct {
 	defaultConfig Cfg
-	flags         *pflag.FlagSet
 }
 
 type AllSettings map[string]any
@@ -62,41 +59,43 @@ type configParams[Cfg Flagger] struct {
 	Override    func(*Cfg)  `optional:"true"`
 }
 
-func (c *config[Cfg]) provideConfig(p configParams[Cfg]) (Cfg, error) {
-	settings := p.AllSettings
-	target := c.defaultConfig
-	decoder, err := mapstructure.NewDecoder(decoderConfig(&target, p.DecodeHooks))
-	if err != nil {
-		return target, fmt.Errorf("failed to create config decoder: %w", err)
-	}
-
-	// As input, only consider the declared flags.
-	input := make(map[string]any)
-
-	c.flags.VisitAll(func(f *pflag.Flag) {
-		if v, ok := settings[f.Name]; ok {
-			input[f.Name] = v
-		} else {
-			err = fmt.Errorf("internal error: %s not found from settings", f.Name)
+func provideConfig[Cfg Flagger](defaultConfig Cfg, flags *pflag.FlagSet) func(p configParams[Cfg]) (Cfg, error) {
+	return func(p configParams[Cfg]) (Cfg, error) {
+		settings := p.AllSettings
+		target := defaultConfig
+		decoder, err := mapstructure.NewDecoder(decoderConfig(&target, p.DecodeHooks))
+		if err != nil {
+			return target, fmt.Errorf("failed to create config decoder: %w", err)
 		}
-	})
-	if err != nil {
-		return target, err
-	}
-	if err := decoder.Decode(input); err != nil {
-		return target, fmt.Errorf("failed to unmarshal config struct %T: %w.\n"+
-			"Hint: field 'FooBar' matches flag 'foo-bar', or use tag `mapstructure:\"flag-name\"` to match field with flag",
-			target, err)
-	}
 
-	// See if the configuration was overridden with ConfigOverride. We check the override
-	// after the decode to validate that the config struct is properly formed and all
-	// flags are registered.
-	if p.Override != nil {
-		p.Override(&target)
-	}
+		// As input, only consider the declared flags.
+		input := make(map[string]any)
 
-	return target, nil
+		flags.VisitAll(func(f *pflag.Flag) {
+			if v, ok := settings[f.Name]; ok {
+				input[f.Name] = v
+			} else {
+				err = fmt.Errorf("internal error: %s not found from settings", f.Name)
+			}
+		})
+		if err != nil {
+			return target, err
+		}
+		if err := decoder.Decode(input); err != nil {
+			return target, fmt.Errorf("failed to unmarshal config struct %T: %w.\n"+
+				"Hint: field 'FooBar' matches flag 'foo-bar', or use tag `mapstructure:\"flag-name\"` to match field with flag",
+				target, err)
+		}
+
+		// See if the configuration was overridden with ConfigOverride. We check the override
+		// after the decode to validate that the config struct is properly formed and all
+		// flags are registered.
+		if p.Override != nil {
+			p.Override(&target)
+		}
+
+		return target, nil
+	}
 }
 
 func decoderConfig(target any, extraHooks DecodeHooks) *mapstructure.DecoderConfig {
@@ -145,16 +144,22 @@ func decoderConfig(target any, extraHooks DecodeHooks) *mapstructure.DecoderConf
 }
 
 func (c *config[Cfg]) Apply(cont container) error {
+	flags := pflag.NewFlagSet("", pflag.ContinueOnError)
+	c.defaultConfig.Flags(flags)
+
 	// Register the flags to the global set of all flags.
 	err := cont.Invoke(
 		func(allFlags *pflag.FlagSet) {
-			allFlags.AddFlagSet(c.flags)
+			allFlags.AddFlagSet(flags)
 		})
 	if err != nil {
 		return err
 	}
 	// And provide the constructor for the config.
-	return cont.Provide(c.provideConfig, dig.Export(true))
+	return cont.Provide(
+		provideConfig(c.defaultConfig, flags),
+		dig.Export(true),
+	)
 }
 
 func (c *config[Cfg]) Info(cont container) (info Info) {
