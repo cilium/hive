@@ -37,6 +37,9 @@ func TestHiveGoodConfig(t *testing.T) {
 		"test",
 		"Test Module",
 		cell.Config(Config{}),
+		cell.Probe(func() {
+			fmt.Println("probing!!!...")
+		}),
 		cell.Invoke(func(c Config) {
 			cfg = c
 		}),
@@ -524,4 +527,46 @@ func Test_Regression_Parallel_Config(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestHiveWithProbe(t *testing.T) {
+	orderLock := &sync.Mutex{}
+	order := []string{}
+	event := func(e string) {
+		orderLock.Lock()
+		defer orderLock.Unlock()
+		order = append(order, e)
+	}
+
+	probeFn := func(c Config) {
+		event("probe1:" + c.Foo)
+	}
+	testCell := cell.Module(
+		"test",
+		"Test Module",
+		cell.Config(Config{}),
+		cell.Probe(probeFn, probeFn),
+		cell.Invoke(func(c Config) {
+			event("invoke1")
+		}),
+	)
+
+	log := hivetest.Logger(t)
+
+	h := hive.New(testCell)
+
+	flags := pflag.NewFlagSet("", pflag.ContinueOnError)
+	h.RegisterFlags(flags)
+
+	err := h.Start(log, context.TODO())
+	assert.NoError(t, err, "expected Start to succeed")
+	err = h.Stop(log, context.TODO())
+	assert.NoError(t, err, "expected Stop to succeed")
+
+	assert.Equal(t, []string{"probe1:hello world", "probe1:hello world", "invoke1"}, order)
+
+	order = nil
+	h = hive.New(testCell)
+	assert.NoError(t, h.Populate(log))
+	assert.Equal(t, []string{"invoke1"}, order)
 }

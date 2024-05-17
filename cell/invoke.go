@@ -17,6 +17,9 @@ import (
 )
 
 type invoker struct {
+	// probe denotes if this invoke is a "cell.Probe" which is run before
+	// the lifecycle phase, but not during
+	probe bool
 	funcs []namedFunc
 }
 
@@ -29,7 +32,7 @@ type namedFunc struct {
 }
 
 type InvokerList interface {
-	AppendInvoke(func(*slog.Logger, time.Duration) error)
+	AppendInvoke(probe bool, fn func(*slog.Logger, time.Duration) error)
 }
 
 func (inv *invoker) invoke(log *slog.Logger, cont container, logThreshold time.Duration) error {
@@ -73,7 +76,7 @@ func (inv *invoker) Apply(c container) error {
 	// we don't yet know which command to run, but we still need to register
 	// all the flags.
 	return c.Invoke(func(l InvokerList) {
-		l.AppendInvoke(invoker)
+		l.AppendInvoke(inv.probe, invoker)
 	})
 }
 
@@ -101,11 +104,19 @@ func (inv *invoker) Info(container) Info {
 // Invoke constructs a cell for invoke functions. The invoke functions are executed
 // when the hive is started to instantiate all objects via the constructors.
 func Invoke(funcs ...any) Cell {
+	return invoke(false, funcs...)
+}
+
+func invoke(probe bool, funcs ...any) Cell {
 	namedFuncs := []namedFunc{}
 	for _, fn := range funcs {
 		namedFuncs = append(
 			namedFuncs,
 			namedFunc{name: internal.FuncNameAndLocation(fn), fn: fn})
 	}
-	return &invoker{funcs: namedFuncs}
+	return &invoker{funcs: namedFuncs, probe: probe}
+}
+
+func Probe(funcs ...any) Cell {
+	return invoke(true, funcs...)
 }
