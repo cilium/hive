@@ -190,6 +190,7 @@ type defaults struct {
 	Lifecycle              cell.Lifecycle
 	Shutdowner             Shutdowner
 	InvokerList            cell.InvokerList
+	ProberList             cell.ProberList
 	EmptyFullModuleID      cell.FullModuleID
 	DecodeHooks            cell.DecodeHooks
 	ModuleDecorators       cell.ModuleDecorators
@@ -204,6 +205,7 @@ func (h *Hive) provideDefaults() error {
 			Lifecycle:              h.lifecycle,
 			Shutdowner:             h,
 			InvokerList:            h,
+			ProberList:             h,
 			EmptyFullModuleID:      nil,
 			DecodeHooks:            h.opts.DecodeHooks,
 			ModuleDecorators:       h.opts.ModuleDecorators,
@@ -316,6 +318,8 @@ func (h *Hive) populate(log *slog.Logger, probe bool) error {
 		}
 	}
 
+	// Probes apply provide like funcs on Config[T] types
+	// TODO: Can we replace the ConfigOverrides with this, it seems kinda similar?
 	if probe {
 		for _, probe := range h.probes {
 			if err := probe(log, h.opts.LogThreshold); err != nil {
@@ -333,12 +337,12 @@ func (h *Hive) populate(log *slog.Logger, probe bool) error {
 	return nil
 }
 
-func (h *Hive) AppendInvoke(probe bool, invoke func(*slog.Logger, time.Duration) error) {
-	if probe {
-		h.probes = append(h.probes, invoke)
-		return
-	}
+func (h *Hive) AppendInvoke(invoke func(*slog.Logger, time.Duration) error) {
 	h.invokes = append(h.invokes, invoke)
+}
+
+func (h *Hive) AppendProbe(invoke func(*slog.Logger, time.Duration) error) {
+	h.probes = append(h.probes, invoke)
 }
 
 // Start starts the hive. The context allows cancelling the start.
