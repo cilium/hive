@@ -105,6 +105,7 @@ type Hive struct {
 	viper           *viper.Viper
 	lifecycle       cell.Lifecycle
 	populated       bool
+	probes          []func(*slog.Logger, time.Duration) error
 	invokes         []func(*slog.Logger, time.Duration) error
 	configOverrides []any
 }
@@ -189,6 +190,7 @@ type defaults struct {
 	Lifecycle              cell.Lifecycle
 	Shutdowner             Shutdowner
 	InvokerList            cell.InvokerList
+	ProberList             cell.ProberList
 	EmptyFullModuleID      cell.FullModuleID
 	DecodeHooks            cell.DecodeHooks
 	ModuleDecorators       cell.ModuleDecorators
@@ -203,6 +205,7 @@ func (h *Hive) provideDefaults() error {
 			Lifecycle:              h.lifecycle,
 			Shutdowner:             h,
 			InvokerList:            h,
+			ProberList:             h,
 			EmptyFullModuleID:      nil,
 			DecodeHooks:            h.opts.DecodeHooks,
 			ModuleDecorators:       h.opts.ModuleDecorators,
@@ -260,6 +263,10 @@ func (h *Hive) waitForSignalOrShutdown(log *slog.Logger) error {
 // Populate instantiates the hive. Use for testing that the hive can
 // be instantiated.
 func (h *Hive) Populate(log *slog.Logger) error {
+	return h.populate(log, false)
+}
+
+func (h *Hive) populate(log *slog.Logger, probe bool) error {
 	if h.populated {
 		return nil
 	}
@@ -311,6 +318,16 @@ func (h *Hive) Populate(log *slog.Logger) error {
 		}
 	}
 
+	// Probes apply provide like funcs on Config[T] types
+	// TODO: Can we replace the ConfigOverrides with this, it seems kinda similar?
+	if probe {
+		for _, probe := range h.probes {
+			if err := probe(log, h.opts.LogThreshold); err != nil {
+				return err
+			}
+		}
+	}
+
 	// Execute the invoke functions to construct the objects.
 	for _, invoke := range h.invokes {
 		if err := invoke(log, h.opts.LogThreshold); err != nil {
@@ -324,15 +341,21 @@ func (h *Hive) AppendInvoke(invoke func(*slog.Logger, time.Duration) error) {
 	h.invokes = append(h.invokes, invoke)
 }
 
+func (h *Hive) AppendProbe(invoke func(*slog.Logger, time.Duration) error) {
+	h.probes = append(h.probes, invoke)
+}
+
 // Start starts the hive. The context allows cancelling the start.
 // If context is cancelled and the start hooks do not respect the cancellation
 // then after 5 more seconds the process will be terminated forcefully.
 func (h *Hive) Start(log *slog.Logger, ctx context.Context) error {
-	if err := h.Populate(log); err != nil {
+	if err := h.populate(log, true); err != nil {
 		return err
 	}
 
 	defer close(h.fatalOnTimeout(ctx))
+
+	log.Info("Probing config")
 
 	log.Info("Starting")
 	start := time.Now()
@@ -392,7 +415,7 @@ func (h *Hive) Shutdown(opts ...ShutdownOption) {
 }
 
 func (h *Hive) PrintObjects() {
-	if err := h.Populate(slog.Default()); err != nil {
+	if err := h.populate(slog.Default(), false); err != nil {
 		panic(fmt.Sprintf("Failed to populate object graph: %s", err))
 	}
 
@@ -406,7 +429,7 @@ func (h *Hive) PrintObjects() {
 }
 
 func (h *Hive) PrintDotGraph() {
-	if err := h.Populate(slog.Default()); err != nil {
+	if err := h.populate(slog.Default(), false); err != nil {
 		panic(fmt.Sprintf("Failed to populate object graph: %s", err))
 	}
 
