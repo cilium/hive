@@ -151,6 +151,109 @@ func TestTimer_DoubleTrigger(t *testing.T) {
 	}
 }
 
+// This test asserts that, if a trigger is called multiple times over the debounce interval, the events will coalesce
+func TestTimer_TriggerDebounce(t *testing.T) {
+	t.Parallel()
+
+	ran := make(chan struct{})
+
+	var i int
+
+	trigger := NewTrigger(WithDebounce(time.Hour))
+
+	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
+		g := r.NewGroup(s)
+
+		g.Add(
+			Timer("on-interval", func(ctx context.Context) error {
+				defer func(iter int) {
+					if iter == 0 {
+						close(ran)
+					}
+				}(i)
+
+				i++
+
+				return nil
+			}, 1*time.Hour, WithTrigger(trigger)),
+		)
+
+		l.Append(g)
+	})
+
+	// Trigger once before we start consuming events, to run the job immediately after start
+	trigger.Trigger()
+
+	log := hivetest.Logger(t)
+	if err := h.Start(log, context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	<-ran
+
+	// Trigger a few times after the initial run, these should coalesce
+	trigger.Trigger()
+	trigger.Trigger()
+	trigger.Trigger()
+
+	if err := h.Stop(log, context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if i != 1 {
+		t.Fail()
+	}
+}
+
+// This test asserts that a timer with a zero interval will run its job only when triggered
+func TestTimer_TriggerOnly(t *testing.T) {
+	t.Parallel()
+
+	ran := make(chan struct{})
+
+	i := 0
+
+	trigger := NewTrigger()
+
+	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
+		g := r.NewGroup(s)
+
+		g.Add(
+			Timer("on-interval", func(ctx context.Context) error {
+				defer func() { ran <- struct{}{} }()
+
+				i++
+
+				return nil
+			}, 0, WithTrigger(trigger)),
+		)
+
+		l.Append(g)
+	})
+
+	log := hivetest.Logger(t)
+	if err := h.Start(log, context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	trigger.Trigger()
+	<-ran
+
+	trigger.Trigger()
+	<-ran
+
+	trigger.Trigger()
+	<-ran
+
+	if err := h.Stop(log, context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if i != 3 {
+		t.Fail()
+	}
+}
+
 // This test asserts that the timer will stop as soon as the lifecycle has stopped, when waiting for an interval pulse
 func TestTimer_ExitOnClose(t *testing.T) {
 	t.Parallel()

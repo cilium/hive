@@ -51,24 +51,63 @@ type Trigger interface {
 }
 
 // NewTrigger creates a new trigger, which can be used to trigger a timer job.
-func NewTrigger() *trigger {
-	return &trigger{
+func NewTrigger(opts ...triggerOpt) *trigger {
+	t := &trigger{
 		c: make(chan struct{}, 1),
+	}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t
+}
+
+// WithDebounce allows to specify an interval over with multiple trigger requests will be folded into one.
+func WithDebounce(interval time.Duration) triggerOpt {
+	return func(t *trigger) {
+		t.debounce = interval
 	}
 }
 
 type trigger struct {
-	c chan struct{}
+	debounce time.Duration
+
+	mu            sync.Mutex
+	c             chan struct{}
+	lastTriggered time.Time
 }
 
 func (t *trigger) _trigger() {}
 
 func (t *trigger) Trigger() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.debounce > 0 && time.Since(t.lastTriggered) < t.debounce {
+		return
+	}
+
 	select {
 	case t.c <- struct{}{}:
 	default:
 	}
 }
+
+func (t *trigger) markTriggered() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.lastTriggered = time.Now()
+
+	// discard a possibly enqueued trigger notification.
+	// This is needed when a notification is already enqueued in the channel (and thus has already passed the debounce check)
+	// but the fair scheduling receives from the ticker channel.
+	select {
+	case <-t.c:
+	default:
+	}
+}
+
+type triggerOpt func(t *trigger)
 
 // WithTrigger option allows a user to specify a trigger, which if triggered will invoke the function of a timer
 // before the configured interval has expired.
@@ -105,8 +144,12 @@ func (jt *jobTimer) start(ctx context.Context, wg *sync.WaitGroup, health cell.H
 		"name", jt.name,
 		"func", internal.FuncNameAndLocation(jt.fn))
 
-	timer := time.NewTicker(jt.interval)
-	defer timer.Stop()
+	var tickerChan <-chan time.Time
+	if jt.interval > 0 {
+		ticker := time.NewTicker(jt.interval)
+		defer ticker.Stop()
+		tickerChan = ticker.C
+	}
 
 	var triggerChan chan struct{}
 	if jt.trigger != nil {
@@ -121,11 +164,15 @@ func (jt *jobTimer) start(ctx context.Context, wg *sync.WaitGroup, health cell.H
 		case <-ctx.Done():
 			jt.health.Stopped("timer job context done")
 			return
-		case <-timer.C:
+		case <-tickerChan:
 		case <-triggerChan:
 		}
 
 		l.Debug("Timer job triggered")
+
+		if jt.trigger != nil {
+			jt.trigger.markTriggered()
+		}
 
 		start := time.Now()
 		err := jt.fn(ctx)
