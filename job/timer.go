@@ -74,6 +74,8 @@ type trigger struct {
 	mu            sync.Mutex
 	c             chan struct{}
 	lastTriggered time.Time
+	folds         int
+	waitStart     time.Time
 }
 
 func (t *trigger) _trigger() {}
@@ -81,6 +83,11 @@ func (t *trigger) _trigger() {}
 func (t *trigger) Trigger() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	if t.folds == 0 {
+		t.waitStart = time.Now()
+	}
+	t.folds++
 
 	if t.debounce > 0 && time.Since(t.lastTriggered) < t.debounce {
 		return
@@ -92,11 +99,15 @@ func (t *trigger) Trigger() {
 	}
 }
 
-func (t *trigger) markTriggered() {
+func (t *trigger) markTriggered(name string, metrics Metrics) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	t.lastTriggered = time.Now()
+	if metrics != nil {
+		metrics.TimerTriggerStats(name, t.lastTriggered.Sub(t.waitStart), t.folds)
+	}
+	t.folds = 0
 
 	// discard a possibly enqueued trigger notification.
 	// This is needed when a notification is already enqueued in the channel (and thus has already passed the debounce check)
@@ -171,7 +182,7 @@ func (jt *jobTimer) start(ctx context.Context, wg *sync.WaitGroup, health cell.H
 		l.Debug("Timer job triggered")
 
 		if jt.trigger != nil {
-			jt.trigger.markTriggered()
+			jt.trigger.markTriggered(jt.name, options.metrics)
 		}
 
 		start := time.Now()
