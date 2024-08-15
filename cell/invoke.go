@@ -6,7 +6,7 @@ package cell
 import (
 	"fmt"
 	"log/slog"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -91,7 +91,7 @@ func (inv *invoker) Info(container) Info {
 		for _, input := range namedFunc.info.Inputs {
 			ins = append(ins, input.String())
 		}
-		sort.Strings(ins)
+		slices.Sort(ins)
 		invNode.AddLeaf("⇨ %s", strings.Join(ins, ", "))
 		n.Add(invNode)
 	}
