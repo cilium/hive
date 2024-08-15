@@ -62,11 +62,12 @@ func (p *provider) Info(container) Info {
 		ctorNode := NewInfoNode(fmt.Sprintf("🚧%s %s", privateSymbol, internal.FuncNameAndLocation(ctor)))
 		ctorNode.condensed = true
 
-		var ins, outs []string
+		ins := make([]string, 0, len(info.Inputs))
 		for _, input := range info.Inputs {
 			ins = append(ins, input.String())
 		}
 		slices.Sort(ins)
+		outs := make([]string, 0, len(info.Outputs))
 		for _, output := range info.Outputs {
 			outs = append(outs, output.String())
 		}

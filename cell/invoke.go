@@ -87,7 +87,7 @@ func (inv *invoker) Info(container) Info {
 		invNode := NewInfoNode(fmt.Sprintf("🛠️ %s", namedFunc.name))
 		invNode.condensed = true
 
-		var ins []string
+		ins := make([]string, 0, len(namedFunc.info.Inputs))
 		for _, input := range namedFunc.info.Inputs {
 			ins = append(ins, input.String())
 		}
