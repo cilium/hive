@@ -5,7 +5,7 @@ package cell
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 
@@ -66,11 +66,11 @@ func (p *provider) Info(container) Info {
 		for _, input := range info.Inputs {
 			ins = append(ins, input.String())
 		}
-		sort.Strings(ins)
+		slices.Sort(ins)
 		for _, output := range info.Outputs {
 			outs = append(outs, output.String())
 		}
-		sort.Strings(outs)
+		slices.Sort(outs)
 		if len(ins) > 0 {
 			ctorNode.AddLeaf("⇨ %s", strings.Join(ins, ", "))
 		}
