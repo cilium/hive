@@ -32,7 +32,7 @@ type Registry interface {
 	// NewGroup creates a new group of jobs which can be started and stopped together as part of the cells lifecycle.
 	// The provided scope is used to report health status of the jobs. A `cell.Scope` can be obtained via injection
 	// an object with the correct scope is provided by the closest `cell.Module`.
-	NewGroup(health cell.Health, opts ...groupOpt) Group
+	NewGroup(health cell.Health, opts ...GroupOpt) Group
 }
 
 type registry struct {
@@ -55,7 +55,7 @@ func newRegistry(
 
 // NewGroup creates a new Group with the given `opts` options, which allows you to customize the behavior for the
 // group as a whole. For example by allowing you to add pprof labels to the group or by customizing the logger.
-func (c *registry) NewGroup(health cell.Health, opts ...groupOpt) Group {
+func (c *registry) NewGroup(health cell.Health, opts ...GroupOpt) Group {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -120,11 +120,11 @@ type options struct {
 	metrics     Metrics
 }
 
-type groupOpt func(o *options)
+type GroupOpt func(o *options)
 
 // WithLogger replaces the default logger with the given logger, useful if you want to add certain fields to the logs
 // created by the group/jobs.
-func WithLogger(logger *slog.Logger) groupOpt {
+func WithLogger(logger *slog.Logger) GroupOpt {
 	return func(o *options) {
 		o.logger = logger
 	}
@@ -132,13 +132,13 @@ func WithLogger(logger *slog.Logger) groupOpt {
 
 // WithPprofLabels adds pprof labels which will be added to the goroutines spawned for the jobs and thus included in
 // the pprof profiles.
-func WithPprofLabels(pprofLabels pprof.LabelSet) groupOpt {
+func WithPprofLabels(pprofLabels pprof.LabelSet) GroupOpt {
 	return func(o *options) {
 		o.pprofLabels = pprofLabels
 	}
 }
 
-func WithMetrics(metrics Metrics) groupOpt {
+func WithMetrics(metrics Metrics) GroupOpt {
 	return func(o *options) {
 		o.metrics = metrics
 	}

@@ -21,7 +21,7 @@ import (
 //
 // The given function is expected to exit as soon as the context given to it expires, this is especially important for
 // blocking or long running jobs.
-func OneShot(name string, fn OneShotFunc, opts ...jobOneShotOpt) Job {
+func OneShot(name string, fn OneShotFunc, opts ...JobOneShotOpt) Job {
 	if fn == nil {
 		panic("`fn` must not be nil")
 	}
@@ -35,7 +35,7 @@ func OneShot(name string, fn OneShotFunc, opts ...jobOneShotOpt) Job {
 	return job
 }
 
-type jobOneShotOpt func(*jobOneShot)
+type JobOneShotOpt func(*jobOneShot)
 
 type RetryBackoff interface {
 	Wait() time.Duration
@@ -68,7 +68,7 @@ func (e *ExponentialBackoff) Wait() time.Duration {
 // WithRetry option configures a one shot job to retry `times` amount of times. On each retry attempt the
 // rate limiter is waited upon before making another attempt.
 // If `times` is <0, then the job is retried forever.
-func WithRetry(times int, backoff RetryBackoff) jobOneShotOpt {
+func WithRetry(times int, backoff RetryBackoff) JobOneShotOpt {
 	return func(jos *jobOneShot) {
 		jos.retry = times
 		jos.backoff = backoff
@@ -77,7 +77,7 @@ func WithRetry(times int, backoff RetryBackoff) jobOneShotOpt {
 
 // WithShutdown option configures a one shot job to shutdown the whole hive if the job returns an error. If the
 // WithRetry option is also configured, all retries must be exhausted before we trigger the shutdown.
-func WithShutdown() jobOneShotOpt {
+func WithShutdown() JobOneShotOpt {
 	return func(jos *jobOneShot) {
 		jos.shutdownOnError = true
 	}
@@ -90,7 +90,7 @@ type OneShotFunc func(ctx context.Context, health cell.Health) error
 type jobOneShot struct {
 	name string
 	fn   OneShotFunc
-	opts []jobOneShotOpt
+	opts []JobOneShotOpt
 
 	health cell.Health
 
