@@ -24,7 +24,7 @@ import (
 // interval, its next invocation is not delayed. The `fn` is expected to stop as soon as the context passed to it
 // expires. This is especially important for long running functions. The signal created by a Trigger is coalesced so
 // multiple calls to trigger before the invocation takes place can result in just a single invocation.
-func Timer(name string, fn TimerFunc, interval time.Duration, opts ...timerOpt) Job {
+func Timer(name string, fn TimerFunc, interval time.Duration, opts ...TimerOpt) Job {
 	if fn == nil {
 		panic("`fn` must not be nil")
 	}
@@ -42,7 +42,7 @@ func Timer(name string, fn TimerFunc, interval time.Duration, opts ...timerOpt) 
 // TimerFunc is the func type invoked by a timer job. A TimerFunc is expected to return as soon as the ctx expires.
 type TimerFunc func(ctx context.Context) error
 
-type timerOpt func(*jobTimer)
+type TimerOpt func(*jobTimer)
 
 // Trigger which can be used to trigger a timer job, trigger events are coalesced.
 type Trigger interface {
@@ -51,7 +51,7 @@ type Trigger interface {
 }
 
 // NewTrigger creates a new trigger, which can be used to trigger a timer job.
-func NewTrigger(opts ...triggerOpt) *trigger {
+func NewTrigger(opts ...TriggerOpt) *trigger {
 	t := &trigger{
 		c: make(chan struct{}, 1),
 	}
@@ -62,7 +62,7 @@ func NewTrigger(opts ...triggerOpt) *trigger {
 }
 
 // WithDebounce allows to specify an interval over with multiple trigger requests will be folded into one.
-func WithDebounce(interval time.Duration) triggerOpt {
+func WithDebounce(interval time.Duration) TriggerOpt {
 	return func(t *trigger) {
 		t.debounce = interval
 	}
@@ -118,11 +118,11 @@ func (t *trigger) markTriggered(name string, metrics Metrics) {
 	}
 }
 
-type triggerOpt func(t *trigger)
+type TriggerOpt func(t *trigger)
 
 // WithTrigger option allows a user to specify a trigger, which if triggered will invoke the function of a timer
 // before the configured interval has expired.
-func WithTrigger(trig Trigger) timerOpt {
+func WithTrigger(trig Trigger) TimerOpt {
 	return func(jt *jobTimer) {
 		jt.trigger = trig.(*trigger)
 	}
@@ -131,7 +131,7 @@ func WithTrigger(trig Trigger) timerOpt {
 type jobTimer struct {
 	name string
 	fn   TimerFunc
-	opts []timerOpt
+	opts []TimerOpt
 
 	health cell.Health
 
