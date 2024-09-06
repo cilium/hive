@@ -156,3 +156,32 @@ func TestModuleDecoratedGroup(t *testing.T) {
 	assert.NoError(t, h.Stop(log, context.Background()))
 	assert.Equal(t, 2, callCount, "expected OneShot function to be called twice")
 }
+
+func TestOneShot_ValidateName(t *testing.T) {
+	testCases := []struct {
+		name        string
+		jbName      string
+		expectError bool
+	}{
+		{
+			name:        "valid",
+			jbName:      "valid_name",
+			expectError: false,
+		},
+		{
+			name:        "invalid name",
+			jbName:      "$%^&",
+			expectError: true,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateName(tc.jbName)
+			if tc.expectError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}

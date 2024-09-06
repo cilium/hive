@@ -14,8 +14,9 @@ import (
 	"github.com/cilium/hive/internal"
 )
 
-// Timer creates a timer job which can be added to a Group. Timer jobs invoke the given function at the specified
-// interval. Timer jobs are particularly useful to implement periodic syncs and cleanup actions.
+// Timer creates a timer job which can be added to a Group.
+// The Timer job name must match regex "^[a-z][a-z0-9_\\-]{0,30}$". The function passed is invoked at the specified interval.
+// Timer jobs are particularly useful to implement periodic syncs and cleanup actions.
 // Timer jobs can optionally be triggered by an external Trigger with the WithTrigger option.
 // This trigger can for example be passed between cells or between jobs in the same cell to allow for an additional
 // invocation of the function.
@@ -25,6 +26,9 @@ import (
 // expires. This is especially important for long running functions. The signal created by a Trigger is coalesced so
 // multiple calls to trigger before the invocation takes place can result in just a single invocation.
 func Timer(name string, fn TimerFunc, interval time.Duration, opts ...timerOpt) Job {
+	if err := validateName(name); err != nil {
+		panic(err)
+	}
 	if fn == nil {
 		panic("`fn` must not be nil")
 	}
