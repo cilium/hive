@@ -173,6 +173,11 @@ func TestOneShot_ValidateName(t *testing.T) {
 			jbName:      "$%^&",
 			expectError: true,
 		},
+		{
+			name:        "allow upper",
+			jbName:      "AABB00",
+			expectError: false,
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {

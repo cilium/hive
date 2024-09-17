@@ -15,7 +15,7 @@ import (
 )
 
 // Timer creates a timer job which can be added to a Group.
-// The Timer job name must match regex "^[a-z][a-z0-9_\\-]{0,100}$". The function passed is invoked at the specified interval.
+// The Timer job name must match regex "^[a-zA-Z][a-zA-Z0-9_\-]{0,100}$". The function passed is invoked at the specified interval.
 // Timer jobs are particularly useful to implement periodic syncs and cleanup actions.
 // Timer jobs can optionally be triggered by an external Trigger with the WithTrigger option.
 // This trigger can for example be passed between cells or between jobs in the same cell to allow for an additional

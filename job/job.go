@@ -232,7 +232,7 @@ func (sg *scopedGroup) Add(jobs ...Job) {
 	sg.group.add(sg.health, jobs...)
 }
 
-var nameRegex = regexp.MustCompile(`^[a-z][a-z0-9_\-]{0,100}$`)
+var nameRegex = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_\-]{0,100}$`)
 
 func validateName(name string) error {
 	if !nameRegex.MatchString(name) {
