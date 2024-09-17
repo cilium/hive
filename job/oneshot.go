@@ -15,7 +15,7 @@ import (
 )
 
 // OneShot creates a "one shot" job which can be added to a Group.
-// The OneShot job name must match regex "^[a-z][a-z0-9_\\-]{0,100}$". The function passed is invoked once at startup.
+// The OneShot job name must match regex "^[a-zA-Z][a-zA-Z0-9_\-]{0,100}$". The function passed is invoked once at startup.
 // It can live for the entire lifetime of the group or exit early depending on its task.
 // If it returns an error, it can optionally be retried if the WithRetry option. If retries are not configured or
 // all retries failed as well, a shutdown of the hive can be triggered by specifying the WithShutdown option.
