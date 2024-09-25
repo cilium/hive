@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"runtime"
 	"runtime/pprof"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -157,36 +158,41 @@ func TestModuleDecoratedGroup(t *testing.T) {
 	assert.Equal(t, 2, callCount, "expected OneShot function to be called twice")
 }
 
-func TestOneShot_ValidateName(t *testing.T) {
+func Test_sanitizeName(t *testing.T) {
 	testCases := []struct {
-		name        string
-		jbName      string
-		expectError bool
+		name    string
+		in, out string
 	}{
 		{
-			name:        "valid",
-			jbName:      "valid_name",
-			expectError: false,
+			name: "valid",
+			in:   "valid_name-123ABC",
+			out:  "valid_name-123ABC",
 		},
 		{
-			name:        "invalid name",
-			jbName:      "$%^&",
-			expectError: true,
+			name: "allow upper",
+			in:   "AABB00",
+			out:  "AABB00",
 		},
 		{
-			name:        "allow upper",
-			jbName:      "AABB00",
-			expectError: false,
+			name: "invalid name",
+			in:   "X$%^&Y",
+			out:  "XY-4af3ba2ac8",
+		},
+		{
+			name: "unicode chars",
+			in:   "smile😀",
+			out:  "smile-aacf34c444",
+		},
+		{
+			name: "long name",
+			in:   strings.Repeat("a", maxNameLength*2),
+			out:  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-c2a908d98f",
 		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateName(tc.jbName)
-			if tc.expectError {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-			}
+			out := sanitizeName(tc.in)
+			assert.Equal(t, tc.out, out, "name mismatch")
 		})
 	}
 }

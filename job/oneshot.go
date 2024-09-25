@@ -23,9 +23,7 @@ import (
 // The given function is expected to exit as soon as the context given to it expires, this is especially important for
 // blocking or long running jobs.
 func OneShot(name string, fn OneShotFunc, opts ...jobOneShotOpt) Job {
-	if err := validateName(name); err != nil {
-		panic(err)
-	}
+	name = sanitizeName(name)
 	if fn == nil {
 		panic("`fn` must not be nil")
 	}

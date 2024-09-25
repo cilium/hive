@@ -26,9 +26,7 @@ import (
 // expires. This is especially important for long running functions. The signal created by a Trigger is coalesced so
 // multiple calls to trigger before the invocation takes place can result in just a single invocation.
 func Timer(name string, fn TimerFunc, interval time.Duration, opts ...timerOpt) Job {
-	if err := validateName(name); err != nil {
-		panic(err)
-	}
+	name = sanitizeName(name)
 	if fn == nil {
 		panic("`fn` must not be nil")
 	}
