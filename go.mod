@@ -14,6 +14,7 @@ require (
 	go.uber.org/dig v1.17.1
 	go.uber.org/goleak v1.3.0
 	golang.org/x/term v0.15.0
+	golang.org/x/tools v0.16.0
 )
 
 require (
