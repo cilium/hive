@@ -5,6 +5,7 @@ package main
 
 import (
 	"log/slog"
+	"os"
 
 	"github.com/spf13/cobra"
 
@@ -65,14 +66,36 @@ var (
 			return nil
 		},
 	}
+
+	// Define the "repl" command to run the application in an interactive
+	// read-eval-print-loop:
+	//
+	//   $ go run . repl
+	//   example> hive start
+	//   time=2024-10-08T09:39:00.881+02:00 level=INFO msg=Starting
+	//   ...
+	//   example> events
+	//   ...
+	//   example> hive stop
+	replCmd = &cobra.Command{
+		Use: "repl",
+		Run: func(_ *cobra.Command, args []string) {
+			hive.RunRepl(Hive, os.Stdin, os.Stdout, "example> ")
+		},
+	}
 )
 
 func main() {
 	// Register all configuration flags in the hive to the command
 	Hive.RegisterFlags(cmd.Flags())
 
-	// Add the "hive" sub-command for inspecting the hive
-	cmd.AddCommand(Hive.Command())
+	cmd.AddCommand(
+		// Add the "hive" sub-command for inspecting the hive
+		Hive.Command(),
+
+		// Add the "repl" command to interactively run the application.
+		replCmd,
+	)
 
 	// And finally execute the command to parse the command-line flags and
 	// run the hive

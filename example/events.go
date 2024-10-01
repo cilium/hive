@@ -9,8 +9,10 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/cilium/hive"
 	"github.com/cilium/hive/cell"
 	"github.com/cilium/hive/job"
+	"github.com/cilium/hive/script"
 	"github.com/cilium/stream"
 )
 
@@ -20,7 +22,10 @@ var eventsCell = cell.Module(
 	"example-events",
 	"Provides a stream of example events",
 
-	cell.Provide(newExampleEvents),
+	cell.Provide(
+		newExampleEvents,
+		showEventsCommand,
+	),
 )
 
 type ExampleEvent struct {
@@ -85,4 +90,29 @@ func newExampleEvents(lc cell.Lifecycle, jobs job.Registry, health cell.Health) 
 	// Add the group to the lifecycle to be started and stopped.
 	lc.Append(g)
 	return es
+}
+
+// showEventsCommand defines the hive script command "events" that subscribes
+// and shows 5 events.
+func showEventsCommand(ee ExampleEvents) hive.ScriptCmdOut {
+	return hive.NewScriptCmd(
+		"events",
+		script.Command(
+			script.CmdUsage{Summary: "Show 5 events"},
+			func(s *script.State, args ...string) (script.WaitFunc, error) {
+				n := 5
+				ctx, cancel := context.WithCancel(s.Context())
+				defer cancel()
+				for e := range stream.ToChannel(ctx, ee) {
+					if n >= 0 {
+						s.Logf("%s\n", e)
+					} else {
+						cancel()
+					}
+					n--
+				}
+				return nil, nil
+			},
+		),
+	)
 }

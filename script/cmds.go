@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/cilium/hive/script/internal/diff"
+	"golang.org/x/term"
 )
 
 // DefaultCmds returns a set of broadly useful script commands.
@@ -49,6 +50,7 @@ func DefaultCmds() map[string]Cmd {
 		"stop":    Stop(),
 		"symlink": Symlink(),
 		"wait":    Wait(),
+		"break":   Break(),
 	}
 }
 
@@ -1123,4 +1125,43 @@ func (w waitError) Unwrap() error {
 		return w.errs[0]
 	}
 	return nil
+}
+
+func Break() Cmd {
+	return Command(
+		CmdUsage{
+			Summary: "break into interactive prompt",
+		},
+		func(s *State, args ...string) (WaitFunc, error) {
+			tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+			if err != nil {
+				return nil, fmt.Errorf("open /dev/tty: %w", err)
+			}
+			defer tty.Close()
+
+			prev, err := term.MakeRaw(int(tty.Fd()))
+			if err != nil {
+				return nil, fmt.Errorf("cannot set /dev/tty to raw mode")
+			}
+			defer term.Restore(int(tty.Fd()), prev)
+
+			// Flush any pending logs
+			engine := s.engine
+
+			term := term.NewTerminal(tty, "debug> ")
+			s.flushLog(term)
+			fmt.Fprintf(term, "\nBreak! Control-d to continue.\n")
+
+			for {
+				line, err := term.ReadLine()
+				if err != nil {
+					return nil, nil
+				}
+				err = engine.ExecuteLine(s, line, term)
+				if err != nil {
+					fmt.Fprintln(term, err.Error())
+				}
+			}
+		},
+	)
 }
