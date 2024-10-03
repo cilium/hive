@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 
@@ -15,41 +16,56 @@ import (
 )
 
 var (
-	started, stopped int
-
 	errLifecycle = errors.New("nope")
-
-	goodHook = cell.Hook{
-		OnStart: func(cell.HookContext) error {
-			started++
-			return nil
-		},
-		OnStop: func(cell.HookContext) error {
-			stopped++
-			return nil
-		},
-	}
-
 	badStartHook = cell.Hook{
 		OnStart: func(cell.HookContext) error {
 			return errLifecycle
 		},
 	}
 
-	badStopHook = cell.Hook{
-		OnStart: func(cell.HookContext) error {
-			started++
-			return nil
-		},
-		OnStop: func(cell.HookContext) error {
-			return errLifecycle
-		},
-	}
-
-	nilHook = cell.Hook{nil, nil}
+	nilHook = cell.Hook{OnStart: nil, OnStop: nil}
 )
 
+func TestNewDefaultLifecycle(t *testing.T) {
+	var started, stopped int
+	goodHook := cell.Hook{
+		OnStart: func(cell.HookContext) error { started++; return nil },
+		OnStop:  func(cell.HookContext) error { stopped++; return nil },
+	}
+
+	log := slog.Default()
+	lc := cell.NewDefaultLifecycle([]cell.HookInterface{goodHook}, 0, time.Second)
+
+	err := lc.Start(log, context.TODO())
+	assert.NoError(t, err, "expected Start to succeed")
+	err = lc.Stop(log, context.TODO())
+	assert.NoError(t, err, "expected Stop to succeed")
+
+	assert.Equal(t, 1, started)
+	assert.Equal(t, 1, stopped)
+
+	// Construct already started hooks
+	started = 0
+	stopped = 0
+
+	lc = cell.NewDefaultLifecycle([]cell.HookInterface{goodHook}, 1, time.Second)
+	err = lc.Stop(log, context.TODO())
+	assert.NoError(t, err, "expected Stop to succeed")
+
+	assert.Equal(t, 0, started)
+	assert.Equal(t, 1, stopped)
+}
+
 func TestLifecycle(t *testing.T) {
+	var started, stopped int
+	goodHook := cell.Hook{
+		OnStart: func(cell.HookContext) error { started++; return nil },
+		OnStop:  func(cell.HookContext) error { stopped++; return nil },
+	}
+	badStopHook := cell.Hook{
+		OnStart: func(cell.HookContext) error { started++; return nil },
+		OnStop:  func(cell.HookContext) error { return errLifecycle },
+	}
 	log := slog.Default()
 	var lc cell.DefaultLifecycle
 
