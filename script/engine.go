@@ -164,6 +164,8 @@ type CondUsage struct {
 func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Writer) (err error) {
 	defer func(prev *Engine) { s.engine = prev }(s.engine)
 	s.engine = e
+	defer func(prev io.Writer) { s.logOut = prev }(s.logOut)
+	s.logOut = log
 
 	var sectionStart time.Time
 	// endSection flushes the logs for the current section from s.log to log.
@@ -174,7 +176,7 @@ func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Wri
 			// We didn't write a section header or record a timestamp, so just dump the
 			// whole log without those.
 			if s.log.Len() > 0 {
-				err = s.flushLog(log)
+				err = s.FlushLog()
 			}
 		} else if s.log.Len() == 0 {
 			// Adding elapsed time for doing nothing is meaningless, so don't.
@@ -184,7 +186,7 @@ func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Wri
 			_, err = fmt.Fprintf(log, " (%.3fs)\n", time.Since(sectionStart).Seconds())
 
 			if err == nil && (!ok || !e.Quiet) {
-				err = s.flushLog(log)
+				err = s.FlushLog()
 			} else {
 				s.log.Reset()
 			}
@@ -316,10 +318,9 @@ func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Wri
 func (e *Engine) ExecuteLine(s *State, line string, log io.Writer) (err error) {
 	defer func(prev *Engine) { s.engine = prev }(s.engine)
 	s.engine = e
-
-	defer func() {
-		s.flushLog(log)
-	}()
+	defer func(prev io.Writer) { s.logOut = prev }(s.logOut)
+	s.logOut = log
+	defer s.FlushLog()
 
 	cmd, err := parse("<stdin>", 0, line)
 	if cmd == nil && err == nil {
@@ -652,23 +653,21 @@ func (e *Engine) runCommand(s *State, cmd *command, impl Cmd) error {
 		return nil
 	}
 
-	if wait != nil {
-		stdout, stderr, waitErr := wait(s)
-		s.stdout = stdout
-		s.stderr = stderr
-		if stdout != "" {
-			s.Logf("[stdout]\n%s", stdout)
-		}
-		if stderr != "" {
-			s.Logf("[stderr]\n%s", stderr)
-		}
-		if cmdErr := checkStatus(cmd, waitErr); cmdErr != nil {
-			return cmdErr
-		}
-		if waitErr != nil {
-			// waitErr was expected (by cmd.want), so log it instead of returning it.
-			s.Logf("[%v]\n", waitErr)
-		}
+	stdout, stderr, waitErr := wait(s)
+	s.stdout = stdout
+	s.stderr = stderr
+	if stdout != "" {
+		s.Logf("[stdout]\n%s", stdout)
+	}
+	if stderr != "" {
+		s.Logf("[stderr]\n%s", stderr)
+	}
+	if cmdErr := checkStatus(cmd, waitErr); cmdErr != nil {
+		return cmdErr
+	}
+	if waitErr != nil {
+		// waitErr was expected (by cmd.want), so log it instead of returning it.
+		s.Logf("[%v]\n", waitErr)
 	}
 	return nil
 }

@@ -1149,7 +1149,7 @@ func Break() Cmd {
 			engine := s.engine
 
 			term := term.NewTerminal(tty, "debug> ")
-			s.flushLog(term)
+			s.FlushLog()
 			fmt.Fprintf(term, "\nBreak! Control-d to continue.\n")
 
 			for {
