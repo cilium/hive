@@ -24,7 +24,7 @@ var eventsCell = cell.Module(
 
 	cell.Provide(
 		newExampleEvents,
-		showEventsCommand,
+		watchEventsCommand,
 	),
 )
 
@@ -92,24 +92,17 @@ func newExampleEvents(lc cell.Lifecycle, jobs job.Registry, health cell.Health) 
 	return es
 }
 
-// showEventsCommand defines the hive script command "events" that subscribes
-// and shows 5 events.
-func showEventsCommand(ee ExampleEvents) hive.ScriptCmdOut {
+// watchEventsCommand defines the hive script command "events" that subscribes
+// to events.
+func watchEventsCommand(ee ExampleEvents) hive.ScriptCmdOut {
 	return hive.NewScriptCmd(
 		"events",
 		script.Command(
-			script.CmdUsage{Summary: "Show 5 events"},
+			script.CmdUsage{Summary: "Watch events"},
 			func(s *script.State, args ...string) (script.WaitFunc, error) {
-				n := 5
-				ctx, cancel := context.WithCancel(s.Context())
-				defer cancel()
-				for e := range stream.ToChannel(ctx, ee) {
-					if n >= 0 {
-						s.Logf("%s\n", e)
-					} else {
-						cancel()
-					}
-					n--
+				for e := range stream.ToChannel(s.Context(), ee) {
+					s.Logf("%s\n", e)
+					s.FlushLog()
 				}
 				return nil, nil
 			},
