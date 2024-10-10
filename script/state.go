@@ -28,6 +28,7 @@ type State struct {
 	cancel context.CancelFunc
 	file   string
 	log    bytes.Buffer
+	logOut io.Writer
 
 	workdir string            // initial working directory
 	pwd     string            // current working directory during execution
@@ -98,7 +99,9 @@ func (s *State) CloseAndWait(log io.Writer) error {
 	if wait != nil {
 		panic("script: internal error: Wait unexpectedly returns its own WaitFunc")
 	}
-	if flushErr := s.flushLog(log); err == nil {
+	defer func(prev io.Writer) { s.logOut = prev }(s.logOut)
+	s.logOut = log
+	if flushErr := s.FlushLog(); err == nil {
 		err = flushErr
 	}
 	return err
@@ -190,9 +193,9 @@ func (s *State) LogWriter() io.Writer {
 	return &s.log
 }
 
-// flushLog writes the contents of the script's log to w and clears the log.
-func (s *State) flushLog(w io.Writer) error {
-	_, err := w.Write(s.log.Bytes())
+// FlushLog writes out the contents of the script's log and clears the buffer.
+func (s *State) FlushLog() error {
+	_, err := s.logOut.Write(s.log.Bytes())
 	s.log.Reset()
 	return err
 }

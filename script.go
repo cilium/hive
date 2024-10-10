@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/signal"
 	"time"
 
 	"github.com/cilium/hive/cell"
@@ -64,12 +65,12 @@ func hiveScriptCmd(h *Hive, log *slog.Logger) script.Cmd {
 	const defaultTimeout = time.Minute
 	return script.Command(
 		script.CmdUsage{
-			Summary: "inspect and manipulate the hive",
+			Summary: "manipulate the hive",
 			Args:    "cmd args...",
 		},
 		func(s *script.State, args ...string) (script.WaitFunc, error) {
 			if len(args) < 1 {
-				return nil, fmt.Errorf("hive cmd args...\n'cmd' is one of: start, stop, jobs or inspect")
+				return nil, fmt.Errorf("hive cmd args...\n'cmd' is one of: start, stop, jobs")
 			}
 			switch args[0] {
 			case "start":
@@ -81,17 +82,16 @@ func hiveScriptCmd(h *Hive, log *slog.Logger) script.Cmd {
 				defer cancel()
 				return nil, h.Stop(log, ctx)
 			}
-			return nil, fmt.Errorf("unknown hive command %q, expected one of: start, stop, jobs or inspect", args[0])
+			return nil, fmt.Errorf("unknown hive command %q, expected one of: start, stop, jobs", args[0])
 		},
 	)
 }
 
 func RunRepl(h *Hive, in *os.File, out *os.File, prompt string) {
 	// Try to set the input into raw mode.
-	prev, err := term.MakeRaw(int(in.Fd()))
-	if err == nil {
-		defer term.Restore(int(in.Fd()), prev)
-	}
+	restore, err := script.MakeRaw(int(in.Fd()))
+	defer restore()
+
 	inout := struct {
 		io.Reader
 		io.Writer
@@ -112,11 +112,33 @@ func RunRepl(h *Hive, in *os.File, out *os.File, prompt string) {
 		Cmds:  cmds,
 		Conds: nil,
 	}
-	s, err := script.NewState(context.TODO(), "/tmp", nil)
-	if err != nil {
-		log.Error("script.NewState", "error", err)
-		return
+
+	stop := make(chan struct{})
+	defer close(stop)
+
+	sigs := make(chan os.Signal, 1)
+	defer signal.Stop(sigs)
+	signal.Notify(sigs, os.Interrupt)
+
+	newState := func() *script.State {
+		ctx, cancel := context.WithCancel(context.Background())
+		s, err := script.NewState(ctx, "/tmp", nil)
+		if err != nil {
+			panic(err)
+		}
+		go func() {
+			select {
+			case <-stop:
+				cancel()
+			case <-sigs:
+				cancel()
+			}
+		}()
+		return s
 	}
+
+	s := newState()
+
 	for {
 		line, err := term.ReadLine()
 		if err != nil {
@@ -126,9 +148,17 @@ func RunRepl(h *Hive, in *os.File, out *os.File, prompt string) {
 				panic(err)
 			}
 		}
+
 		err = e.ExecuteLine(s, line, term)
 		if err != nil {
 			fmt.Fprintln(term, err.Error())
+		}
+
+		if s.Context().Err() != nil {
+			// Context was cancelled due to interrupt. Re-create the state
+			// to run more commands.
+			s = newState()
+			fmt.Fprintln(term, "^C (interrupted)")
 		}
 	}
 }
