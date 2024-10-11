@@ -150,7 +150,7 @@ func CachedExec() script.Cond {
 		})
 }
 
-func Test(t *testing.T, ctx context.Context, newEngine func() *script.Engine, env []string, pattern string) {
+func Test(t *testing.T, ctx context.Context, newEngine func(testing.TB) *script.Engine, env []string, pattern string) {
 	gracePeriod := 100 * time.Millisecond
 	if deadline, ok := t.Deadline(); ok {
 		timeout := time.Until(deadline)
@@ -209,7 +209,7 @@ func Test(t *testing.T, ctx context.Context, newEngine func() *script.Engine, en
 			// editors that can jump to file:line references in the output
 			// will work better seeing the full path relative to cmd/go
 			// (where the "go test" command is usually run).
-			Run(t, newEngine(), s, file, bytes.NewReader(a.Comment))
+			Run(t, newEngine(t), s, file, bytes.NewReader(a.Comment))
 		})
 	}
 }
