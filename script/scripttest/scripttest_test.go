@@ -21,5 +21,5 @@ func TestAll(t *testing.T) {
 		Quiet: !testing.Verbose(),
 	}
 	env := os.Environ()
-	scripttest.Test(t, ctx, func() *script.Engine { return engine }, env, "testdata/*.txt")
+	scripttest.Test(t, ctx, func(t testing.TB) *script.Engine { return engine }, env, "testdata/*.txt")
 }
