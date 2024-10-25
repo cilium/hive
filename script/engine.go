@@ -75,7 +75,7 @@ type Engine struct {
 	Quiet bool
 
 	// RetryInterval for retrying commands marked with '*'. If zero, then
-	// retries are disabled.
+	// the default retry interval is used.
 	RetryInterval time.Duration
 }
 
@@ -84,9 +84,11 @@ func NewEngine() *Engine {
 	return &Engine{
 		Cmds:          DefaultCmds(),
 		Conds:         DefaultConds(),
-		RetryInterval: 100 * time.Millisecond,
+		RetryInterval: defaultRetryInterval,
 	}
 }
+
+const defaultRetryInterval = 100 * time.Millisecond
 
 // A Cmd is a command that is available to a script.
 type Cmd interface {
@@ -171,6 +173,11 @@ func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Wri
 	s.engine = e
 	defer func(prev io.Writer) { s.logOut = prev }(s.logOut)
 	s.logOut = log
+
+	retryInterval := e.RetryInterval
+	if retryInterval == 0 {
+		retryInterval = defaultRetryInterval
+	}
 
 	var (
 		sectionStart time.Time
@@ -307,14 +314,13 @@ func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Wri
 		// Run the command.
 		err = e.runCommand(s, cmd, impl)
 		if err != nil {
-			if cmd.want == successRetryOnFailure && e.RetryInterval > 0 {
+			if cmd.want == successRetryOnFailure || cmd.want == failureRetryOnSuccess {
 				// Command wants retries. Retry the whole section
 				for err != nil {
 					select {
 					case <-s.Context().Done():
-						err = lineErr(s.Context().Err())
-						break
-					case <-time.After(e.RetryInterval):
+						return lineErr(s.Context().Err())
+					case <-time.After(retryInterval):
 					}
 					for _, cmd := range sectionCmds {
 						impl := e.Cmds[cmd.name]
@@ -427,6 +433,7 @@ const (
 	failure               expectedStatus = "!"
 	successOrFailure      expectedStatus = "?"
 	successRetryOnFailure expectedStatus = "*"
+	failureRetryOnSuccess expectedStatus = "!*"
 )
 
 type argFragment struct {
@@ -467,11 +474,12 @@ func parse(filename string, lineno int, line string) (cmd *command, err error) {
 			// Command prefix ! means negate the expectations about this command:
 			// go command should fail, match should not be found, etc.
 			// Prefix ? means allow either success or failure.
-			// Prefix * means to retry the command a few times.
+			// Prefix * means to retry the command until success (or context cancelled)
+			// Prefix !* means to retry the command until failure (or context cancelled)
 			switch want := expectedStatus(arg); want {
-			case failure, successOrFailure, successRetryOnFailure:
+			case failure, successOrFailure, successRetryOnFailure, failureRetryOnSuccess:
 				if cmd.want != "" {
-					return errors.New("duplicated '!', '?' or '*' token")
+					return errors.New("duplicated '!', '?', '*' or '!*' token")
 				}
 				cmd.want = want
 				return nil
@@ -705,7 +713,7 @@ func (e *Engine) runCommand(s *State, cmd *command, impl Cmd) error {
 
 func checkStatus(cmd *command, err error) error {
 	if err == nil {
-		if cmd.want == failure {
+		if cmd.want == failure || cmd.want == failureRetryOnSuccess {
 			return cmdError(cmd, ErrUnexpectedSuccess)
 		}
 		return nil
@@ -730,7 +738,7 @@ func checkStatus(cmd *command, err error) error {
 		return cmdError(cmd, err)
 	}
 
-	if cmd.want == failure && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
+	if (cmd.want == failure || cmd.want == failureRetryOnSuccess) && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
 		// The command was terminated because the script is no longer interested in
 		// its output, so we don't know what it would have done had it run to
 		// completion — for all we know, it could have exited without error if it

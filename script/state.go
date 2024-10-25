@@ -36,6 +36,9 @@ type State struct {
 	stdout  string            // standard output from last 'go' command; for 'stdout' command
 	stderr  string            // standard error from last 'go' command; for 'stderr' command
 
+	DoUpdate    bool
+	FileUpdates map[string]string
+
 	background []backgroundCmd
 }
 
@@ -78,12 +81,13 @@ func NewState(ctx context.Context, workdir string, initialEnv []string) (*State,
 	}
 
 	s := &State{
-		ctx:     ctx,
-		cancel:  cancel,
-		workdir: absWork,
-		pwd:     absWork,
-		env:     env,
-		envMap:  envMap,
+		ctx:         ctx,
+		cancel:      cancel,
+		workdir:     absWork,
+		pwd:         absWork,
+		env:         env,
+		envMap:      envMap,
+		FileUpdates: make(map[string]string),
 	}
 	s.Setenv("PWD", absWork)
 	return s, nil
