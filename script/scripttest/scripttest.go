@@ -154,7 +154,7 @@ func CachedExec() script.Cond {
 		})
 }
 
-func Test(t *testing.T, ctx context.Context, newEngine func(testing.TB) *script.Engine, env []string, pattern string) {
+func Test(t *testing.T, ctx context.Context, newEngine func(tb testing.TB, args []string) *script.Engine, env []string, pattern string) {
 	gracePeriod := 100 * time.Millisecond
 	if deadline, ok := t.Deadline(); ok {
 		timeout := time.Until(deadline)
@@ -203,6 +203,17 @@ func Test(t *testing.T, ctx context.Context, newEngine func(testing.TB) *script.
 			if err != nil {
 				t.Fatal(err)
 			}
+
+			// Extract args from a shebang line, e.g.:
+			// #! -foo=1 -bar=true
+			// => ["-foo=1", "-bar=true"]
+			var args []string
+			if shebang, found := strings.CutPrefix(string(a.Comment), "#!"); found {
+				shebang, _, _ = strings.Cut(shebang, "\n")
+				shebang = strings.TrimSpace(shebang)
+				args = strings.Split(shebang, " ")
+			}
+
 			initScriptDirs(t, s)
 			if err := s.ExtractFiles(a); err != nil {
 				t.Fatal(err)
@@ -216,7 +227,7 @@ func Test(t *testing.T, ctx context.Context, newEngine func(testing.TB) *script.
 			// editors that can jump to file:line references in the output
 			// will work better seeing the full path relative to cmd/go
 			// (where the "go test" command is usually run).
-			Run(t, newEngine(t), s, file, bytes.NewReader(a.Comment))
+			Run(t, newEngine(t, args), s, file, bytes.NewReader(a.Comment))
 
 			if *updateFlag {
 				updated := false
