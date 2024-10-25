@@ -8,6 +8,7 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/cilium/hive/script"
 	"github.com/cilium/hive/script/scripttest"
@@ -16,9 +17,10 @@ import (
 func TestAll(t *testing.T) {
 	ctx := context.Background()
 	engine := &script.Engine{
-		Conds: scripttest.DefaultConds(),
-		Cmds:  scripttest.DefaultCmds(),
-		Quiet: !testing.Verbose(),
+		Conds:         scripttest.DefaultConds(),
+		Cmds:          scripttest.DefaultCmds(),
+		Quiet:         !testing.Verbose(),
+		RetryInterval: 10 * time.Millisecond,
 	}
 	env := os.Environ()
 	scripttest.Test(t, ctx, func(t testing.TB) *script.Engine { return engine }, env, "testdata/*.txt")

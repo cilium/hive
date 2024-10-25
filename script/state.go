@@ -26,7 +26,6 @@ type State struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
-	file   string
 	log    bytes.Buffer
 	logOut io.Writer
 

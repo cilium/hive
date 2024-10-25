@@ -73,13 +73,18 @@ type Engine struct {
 	// If Quiet is true, Execute deletes log prints from the previous
 	// section when starting a new section.
 	Quiet bool
+
+	// RetryInterval for retrying commands marked with '*'. If zero, then
+	// retries are disabled.
+	RetryInterval time.Duration
 }
 
 // NewEngine returns an Engine configured with a basic set of commands and conditions.
 func NewEngine() *Engine {
 	return &Engine{
-		Cmds:  DefaultCmds(),
-		Conds: DefaultConds(),
+		Cmds:          DefaultCmds(),
+		Conds:         DefaultConds(),
+		RetryInterval: 100 * time.Millisecond,
 	}
 }
 
@@ -167,7 +172,10 @@ func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Wri
 	defer func(prev io.Writer) { s.logOut = prev }(s.logOut)
 	s.logOut = log
 
-	var sectionStart time.Time
+	var (
+		sectionStart time.Time
+		sectionCmds  []*command
+	)
 	// endSection flushes the logs for the current section from s.log to log.
 	// ok indicates whether all commands in the section succeeded.
 	endSection := func(ok bool) error {
@@ -193,6 +201,7 @@ func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Wri
 		}
 
 		sectionStart = time.Time{}
+		sectionCmds = nil
 		return err
 	}
 
@@ -257,6 +266,8 @@ func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Wri
 		if cmd == nil && err == nil {
 			continue // Ignore blank lines.
 		}
+		sectionCmds = append(sectionCmds, cmd)
+
 		s.Logf("> %s\n", line)
 		if err != nil {
 			return lineErr(err)
@@ -296,16 +307,34 @@ func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Wri
 		// Run the command.
 		err = e.runCommand(s, cmd, impl)
 		if err != nil {
-			if stop := (stopError{}); errors.As(err, &stop) {
-				// Since the 'stop' command halts execution of the entire script,
-				// log its message separately from the section in which it appears.
-				err = endSection(true)
-				s.Logf("%v\n", stop)
-				if err == nil {
-					return nil
+			if cmd.want == successRetryOnFailure && e.RetryInterval > 0 {
+				// Command wants retries. Retry the whole section
+				for err != nil {
+					select {
+					case <-s.Context().Done():
+						err = lineErr(s.Context().Err())
+						break
+					case <-time.After(e.RetryInterval):
+					}
+					for _, cmd := range sectionCmds {
+						impl := e.Cmds[cmd.name]
+						if err = e.runCommand(s, cmd, impl); err != nil {
+							break
+						}
+					}
 				}
+			} else {
+				if stop := (stopError{}); errors.As(err, &stop) {
+					// Since the 'stop' command halts execution of the entire script,
+					// log its message separately from the section in which it appears.
+					err = endSection(true)
+					s.Logf("%v\n", stop)
+					if err == nil {
+						return nil
+					}
+				}
+				return lineErr(err)
 			}
-			return lineErr(err)
 		}
 	}
 
@@ -394,9 +423,10 @@ type command struct {
 type expectedStatus string
 
 const (
-	success          expectedStatus = ""
-	failure          expectedStatus = "!"
-	successOrFailure expectedStatus = "?"
+	success               expectedStatus = ""
+	failure               expectedStatus = "!"
+	successOrFailure      expectedStatus = "?"
+	successRetryOnFailure expectedStatus = "*"
 )
 
 type argFragment struct {
@@ -437,10 +467,11 @@ func parse(filename string, lineno int, line string) (cmd *command, err error) {
 			// Command prefix ! means negate the expectations about this command:
 			// go command should fail, match should not be found, etc.
 			// Prefix ? means allow either success or failure.
+			// Prefix * means to retry the command a few times.
 			switch want := expectedStatus(arg); want {
-			case failure, successOrFailure:
+			case failure, successOrFailure, successRetryOnFailure:
 				if cmd.want != "" {
-					return errors.New("duplicated '!' or '?' token")
+					return errors.New("duplicated '!', '?' or '*' token")
 				}
 				cmd.want = want
 				return nil
@@ -695,7 +726,7 @@ func checkStatus(cmd *command, err error) error {
 		return cmdError(cmd, err)
 	}
 
-	if cmd.want == success {
+	if cmd.want == success || cmd.want == successRetryOnFailure {
 		return cmdError(cmd, err)
 	}
 
