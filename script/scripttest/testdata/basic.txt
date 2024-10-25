@@ -2,11 +2,13 @@ cat hello.txt
 stdout 'hello world'
 ! stderr 'hello world'
 
-exec sh -c 'sleep 0.1 && echo > out.txt' &
+exec sh -c 'sleep 0.1 && echo world > out.txt' &
 
 # Retry section test
 echo hello
-* exec cat out.txt
+* cat out.txt
+* grep world out.txt
+!* grep blah out.txt
 
 -- hello.txt --
 hello world

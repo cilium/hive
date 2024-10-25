@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"flag"
 	"io"
 	"os"
 	"os/exec"
@@ -20,8 +21,11 @@ import (
 	"time"
 
 	"github.com/cilium/hive/script"
+	"golang.org/x/exp/slices"
 	"golang.org/x/tools/txtar"
 )
+
+var updateFlag = flag.Bool("scripttest.update", false, "Update scripttest files")
 
 // DefaultCmds returns a set of broadly useful script commands.
 //
@@ -181,6 +185,8 @@ func Test(t *testing.T, ctx context.Context, newEngine func(testing.TB) *script.
 	}
 	for _, file := range files {
 		file := file
+		wd, _ := os.Getwd()
+		absFile := filepath.Join(wd, file)
 		name := strings.TrimSuffix(filepath.Base(file), ".txt")
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -190,6 +196,7 @@ func Test(t *testing.T, ctx context.Context, newEngine func(testing.TB) *script.
 			if err != nil {
 				t.Fatal(err)
 			}
+			s.DoUpdate = *updateFlag
 
 			// Unpack archive.
 			a, err := txtar.ParseFile(file)
@@ -210,6 +217,26 @@ func Test(t *testing.T, ctx context.Context, newEngine func(testing.TB) *script.
 			// will work better seeing the full path relative to cmd/go
 			// (where the "go test" command is usually run).
 			Run(t, newEngine(t), s, file, bytes.NewReader(a.Comment))
+
+			if *updateFlag {
+				updated := false
+				for name, contents := range s.FileUpdates {
+					idx := slices.IndexFunc(a.Files, func(f txtar.File) bool { return f.Name == name })
+					if idx < 0 {
+						continue
+					}
+					a.Files[idx].Data = []byte(contents)
+					t.Logf("Updated %q", name)
+					updated = true
+				}
+				if updated {
+					err := os.WriteFile(absFile, txtar.Format(a), 0644)
+					if err != nil {
+						t.Fatal(err)
+					}
+					t.Logf("Wrote %q", absFile)
+				}
+			}
 		})
 	}
 }
