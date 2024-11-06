@@ -338,6 +338,36 @@ func TestDecorate(t *testing.T) {
 	assert.True(t, invoked, "expected decorated invoke function to be called")
 }
 
+func TestDecorateAll(t *testing.T) {
+	rootX, testX, test2Int := 0, 0, 0
+	type rootInt int
+	hive := hive.New(
+		cell.Module("test", "test",
+			cell.Provide(func() *SomeObject { return &SomeObject{1} }),
+			cell.Invoke(func(o *SomeObject) { testX = o.X }),
+		),
+		cell.Module("test2", "test2",
+			cell.Provide(func(o *SomeObject) int { return o.X }),
+		),
+		cell.Invoke(func(o *SomeObject, x int) {
+			rootX = o.X
+			test2Int = x
+		}),
+		cell.DecorateAll(
+			func(o *SomeObject) *SomeObject {
+				return &SomeObject{X: o.X + 1}
+			},
+		),
+
+		shutdownOnStartCell,
+	)
+
+	assert.NoError(t, hive.Run(hivetest.Logger(t)), "expected Run() to succeed")
+	assert.Equal(t, 2, rootX, "expected object at root scope to have X=2")
+	assert.Equal(t, 2, testX, "expected object in test module scope to have X=2")
+	assert.Equal(t, 2, test2Int, "expected object in test module scope to be 2")
+}
+
 func TestShutdown(t *testing.T) {
 	//
 	// Happy paths without a shutdown error:
