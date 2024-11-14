@@ -772,7 +772,15 @@ func (e *Engine) ListCmds(w io.Writer, verbose bool, regexMatch string) error {
 		if re != nil && !re.MatchString(name) {
 			continue
 		}
-		cmd := e.Cmds[name]
+		cmd, ok := e.Cmds[name]
+		if !ok {
+			_, err := fmt.Fprintf(w, "command %q is not registered\n", name)
+			if err != nil {
+				return err
+			}
+			return nil
+		}
+
 		usage := cmd.Usage()
 
 		suffix := ""

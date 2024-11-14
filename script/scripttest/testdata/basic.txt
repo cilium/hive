@@ -1,5 +1,9 @@
 #! -foo=bar -baz=quux
 
+help
+help cat
+help unknown-command
+
 # Verify the shebang args parsing
 args
 stdout '^-foo=bar:-baz=quux$'
@@ -21,14 +25,14 @@ wait
 # Test help in various ways
 help
 help wait
-grep wait
+stdout wait
 help -v wait
-grep wait
+stdout wait
 help unknowncommand
 help ^e
-! grep wait
-grep ^exec
-grep ^exists
+! stdout wait
+stdout ^exec
+stdout ^exists
 
 -- hello.txt --
 hello world
