@@ -2,7 +2,7 @@
 
 # Verify the shebang args parsing
 args
-grep '^-foo=bar:-baz=quux$'
+stdout '^-foo=bar:-baz=quux$'
 
 cat hello.txt
 stdout 'hello world'
