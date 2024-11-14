@@ -661,7 +661,10 @@ func match(s *State, args []string, text, name string) error {
 	isGrep := name == "grep"
 
 	wantArgs := 1
-	if !isGrep && len(args) != wantArgs {
+	if isGrep {
+		wantArgs = 2
+	}
+	if len(args) != wantArgs {
 		return ErrUsage
 	}
 
@@ -672,16 +675,12 @@ func match(s *State, args []string, text, name string) error {
 	}
 
 	if isGrep {
-		if len(args) == 1 || args[1] == "-" {
-			text = s.stdout
-		} else {
-			name = args[1] // for error messages
-			data, err := os.ReadFile(s.Path(args[1]))
-			if err != nil {
-				return err
-			}
-			text = string(data)
+		name = args[1] // for error messages
+		data, err := os.ReadFile(s.Path(args[1]))
+		if err != nil {
+			return err
 		}
+		text = string(data)
 	}
 
 	if n > 0 {
