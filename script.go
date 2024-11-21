@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/cilium/hive/cell"
@@ -70,7 +71,7 @@ func hiveScriptCmd(h *Hive, log *slog.Logger) script.Cmd {
 		},
 		func(s *script.State, args ...string) (script.WaitFunc, error) {
 			if len(args) < 1 {
-				return nil, fmt.Errorf("hive cmd args...\n'cmd' is one of: start, stop, jobs")
+				return nil, fmt.Errorf("hive cmd args...\n'cmd' is one of: start, stop or describe")
 			}
 			switch args[0] {
 			case "start":
@@ -81,8 +82,13 @@ func hiveScriptCmd(h *Hive, log *slog.Logger) script.Cmd {
 				ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
 				defer cancel()
 				return nil, h.Stop(log, ctx)
+			case "describe":
+				cell.Describe(s.LogWriter(),
+					strings.Join(args[1:], " "),
+					h.cells...)
+				return nil, nil
 			}
-			return nil, fmt.Errorf("unknown hive command %q, expected one of: start, stop, jobs", args[0])
+			return nil, fmt.Errorf("unknown hive command %q, expected one of: start, stop or describe", args[0])
 		},
 	)
 }

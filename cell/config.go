@@ -48,6 +48,15 @@ type config[Cfg Flagger] struct {
 	defaultConfig Cfg
 }
 
+func (c config[Cfg]) configInfo() (string, any) {
+	var cfg Cfg
+	return reflect.TypeOf(cfg).String(), c.defaultConfig.Flags
+}
+
+type configInfoer interface {
+	configInfo() (typ string, flagsFn any)
+}
+
 type AllSettings map[string]any
 
 type DecodeHooks []mapstructure.DecodeHookFunc

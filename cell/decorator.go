@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/cilium/hive/internal"
+	"go.uber.org/dig"
 )
 
 // Decorate takes a decorator function and a set of cells and returns
@@ -35,12 +36,13 @@ func Decorate(dtor any, cells ...Cell) Cell {
 
 type decorator struct {
 	decorator any
+	info      dig.DecorateInfo
 	cells     []Cell
 }
 
 func (d *decorator) Apply(c container) error {
 	scope := c.Scope(fmt.Sprintf("(decorate %s)", internal.PrettyType(d.decorator)))
-	if err := scope.Decorate(d.decorator); err != nil {
+	if err := scope.Decorate(d.decorator, dig.FillDecorateInfo(&d.info)); err != nil {
 		return err
 	}
 
