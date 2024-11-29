@@ -72,7 +72,7 @@ var (
 	//
 	//   $ go run . repl
 	//   example> hive start
-	//   time=2024-10-08T09:39:00.881+02:00 level=INFO msg=Starting
+	//   time=2024-10-08T09:39:00.881+02:00 level=INFO msg=Starting hive
 	//   ...
 	//   example> events
 	//   ...
