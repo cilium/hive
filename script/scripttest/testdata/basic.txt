@@ -18,5 +18,11 @@ echo hello
 
 wait
 
+# Test help in various ways
+help
+help wait
+help -v wait
+help unknowncommand
+
 -- hello.txt --
 hello world
