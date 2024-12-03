@@ -766,7 +766,11 @@ func (e *Engine) ListCmds(w io.Writer, verbose bool, names ...string) error {
 	}
 
 	for _, name := range names {
-		cmd := e.Cmds[name]
+		cmd, ok := e.Cmds[name]
+		if !ok {
+			fmt.Fprintf(w, "command %q not found\n", name)
+			continue
+		}
 		usage := cmd.Usage()
 
 		suffix := ""
