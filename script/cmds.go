@@ -716,11 +716,13 @@ func Help() Cmd {
 	return Command(
 		CmdUsage{
 			Summary: "log help text for commands and conditions",
-			Args:    "[-v] name...",
+			Args:    "[-v] (regexp)",
 			Detail: []string{
 				"To display help for a specific condition, enclose it in brackets: 'help [amd64]'.",
 				"To display complete documentation when listing all commands, pass the -v flag.",
+				"Commands can be filtered with a regexp: 'help ^db'",
 			},
+			RegexpArgs: firstNonFlag,
 		},
 		func(s *State, args ...string) (WaitFunc, error) {
 			if s.engine == nil {
@@ -757,7 +759,7 @@ func Help() Cmd {
 				if len(args) == 0 {
 					out.WriteString("\ncommands:\n\n")
 				}
-				s.engine.ListCmds(out, verbose, cmds...)
+				s.engine.ListCmds(out, verbose, strings.Join(cmds, " "))
 			}
 
 			wait := func(*State) (stdout, stderr string, err error) {
