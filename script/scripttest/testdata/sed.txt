@@ -1,0 +1,20 @@
+# Tests for the sed command
+
+sed '' '' input.txt
+sed notfound unexpected input.txt
+sed \d+ N input.txt
+sed [uz] '' input.txt
+sed a(x*)b 'a${1}c' input.txt
+sed ^(s+)$ '${1}${1}' input.txt
+cmp input.txt expected.txt
+
+-- input.txt --
+foo123bar
+quuxbaz123
+axxxxxxb
+sss
+-- expected.txt --
+fooNbar
+qxbaN
+axxxxxxc
+ssssss

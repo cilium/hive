@@ -44,6 +44,7 @@ func DefaultCmds() map[string]Cmd {
 		"mv":      Mv(),
 		"rm":      Rm(),
 		"replace": Replace(),
+		"sed":     Sed(),
 		"sleep":   Sleep(),
 		"stderr":  Stderr(),
 		"stdout":  Stdout(),
@@ -880,6 +881,45 @@ func Replace() Cmd {
 			replaced := r.Replace(string(data))
 
 			return nil, os.WriteFile(file, []byte(replaced), 0666)
+		})
+}
+
+// Sed implements a simple regexp replacement of text in a file.
+func Sed() Cmd {
+	return Command(
+		CmdUsage{
+			Summary: "substitute strings in a file with a regexp",
+			Args:    "regexp replacement file",
+			Detail: []string{
+				"A simple sed-like command for replacing text matching regular expressions",
+				"in a file.",
+				"",
+				"Implemented using regexp.ReplaceAll, see its docs for what is supported:",
+				"https://pkg.go.dev/regexp#Regexp.ReplaceAll",
+			},
+			RegexpArgs: firstNonFlag,
+		},
+		func(s *State, args ...string) (WaitFunc, error) {
+			if len(args) != 3 {
+				return nil, ErrUsage
+			}
+
+			re, err := regexp.Compile(args[0])
+			if err != nil {
+				return nil, err
+			}
+			replacement := args[1]
+			file := s.Path(args[2])
+
+			data, err := os.ReadFile(file)
+			if err != nil {
+				return nil, err
+			}
+			lines := strings.Split(string(data), "\n")
+			for i, line := range lines {
+				lines[i] = re.ReplaceAllString(line, replacement)
+			}
+			return nil, os.WriteFile(file, []byte(strings.Join(lines, "\n")), 0666)
 		})
 }
 
