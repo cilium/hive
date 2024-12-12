@@ -1,0 +1,36 @@
+# Test help in various ways
+help
+help wait
+stdout wait
+help -v wait
+stdout wait
+help unknowncommand
+help ^e
+! stdout wait
+stdout ^exec
+stdout ^exists
+
+# Check the 'help' output of the 'stdout' command.
+# The 'cmp' has special handling for 'stdout' and 'stderr'.
+help stdout
+cmp stdout stdout_help.txt
+
+# The -h and --help are intercepted and we show the same
+# output as 'help'
+stdout -h
+cmp stdout stdout_help.txt
+stdout --help
+cmp stdout stdout_help.txt
+
+-- stdout_help.txt --
+stdout [-q] [--count=int] [--quiet] 'pattern'
+	find lines in the stdout buffer that match a pattern
+
+	The command succeeds if at least one match (or the exact
+	count, if given) is found.
+	The -q flag suppresses printing of matches.
+
+	Flags:
+	      --count int   Exact count of matches
+	  -q, --quiet       Suppress printing of matches
+	

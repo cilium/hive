@@ -22,17 +22,6 @@ echo hello
 
 wait
 
-# Test help in various ways
-help
-help wait
-stdout wait
-help -v wait
-stdout wait
-help unknowncommand
-help ^e
-! stdout wait
-stdout ^exec
-stdout ^exists
-
 -- hello.txt --
 hello world
+
