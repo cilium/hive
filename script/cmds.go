@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/cilium/hive/script/internal/diff"
+	"github.com/spf13/pflag"
 	"golang.org/x/term"
 )
 
@@ -176,14 +177,19 @@ func Chmod() Cmd {
 		})
 }
 
+func compareFlags(fs *pflag.FlagSet) {
+	fs.BoolP("quiet", "q", false, "Suppress printing of diff")
+}
+
 // Cmp compares the contents of two files, or the contents of either the
 // "stdout" or "stderr" buffer and a file, returning a non-nil error if the
 // contents differ.
 func Cmp() Cmd {
 	return Command(
 		CmdUsage{
-			Args:    "[-q] file1 file2",
+			Args:    "file1 file2",
 			Summary: "compare files for differences",
+			Flags:   compareFlags,
 			Detail: []string{
 				"By convention, file1 is the actual data and file2 is the expected data.",
 				"The command succeeds if the file contents are identical.",
@@ -200,7 +206,8 @@ func Cmp() Cmd {
 func Cmpenv() Cmd {
 	return Command(
 		CmdUsage{
-			Args:    "[-q] file1 file2",
+			Args:    "file1 file2",
+			Flags:   compareFlags,
 			Summary: "compare files for differences, with environment expansion",
 			Detail: []string{
 				"By convention, file1 is the actual data and file2 is the expected data.",
@@ -214,10 +221,9 @@ func Cmpenv() Cmd {
 }
 
 func doCompare(s *State, env bool, args ...string) error {
-	quiet := false
-	if len(args) > 0 && args[0] == "-q" {
-		quiet = true
-		args = args[1:]
+	quiet, err := s.Flags.GetBool("quiet")
+	if err != nil {
+		return err
 	}
 	if len(args) != 2 {
 		return ErrUsage
@@ -577,23 +583,22 @@ func Exists() Cmd {
 	return Command(
 		CmdUsage{
 			Summary: "check that files exist",
-			Args:    "[-readonly] [-exec] file...",
+			Args:    "file...",
+			Flags: func(fs *pflag.FlagSet) {
+				fs.Bool("readonly", false, "File must not be writable")
+				fs.Bool("exec", false, "File must not be executable")
+			},
 		},
 		func(s *State, args ...string) (WaitFunc, error) {
-			var readonly, exec bool
-		loop:
-			for len(args) > 0 {
-				switch args[0] {
-				case "-readonly":
-					readonly = true
-					args = args[1:]
-				case "-exec":
-					exec = true
-					args = args[1:]
-				default:
-					break loop
-				}
+			readonly, err := s.Flags.GetBool("readonly")
+			if err != nil {
+				return nil, err
 			}
+			exec, err := s.Flags.GetBool("exec")
+			if err != nil {
+				return nil, err
+			}
+
 			if len(args) == 0 {
 				return nil, ErrUsage
 			}
@@ -625,7 +630,8 @@ func Grep() Cmd {
 	return Command(
 		CmdUsage{
 			Summary: "find lines in a file that match a pattern",
-			Args:    matchUsage + " file",
+			Args:    "'pattern' file",
+			Flags:   matchFlags,
 			Detail: []string{
 				"The command succeeds if at least one match (or the exact count, if given) is found.",
 				"The -q flag suppresses printing of matches.",
@@ -637,26 +643,20 @@ func Grep() Cmd {
 		})
 }
 
-const matchUsage = "[-count=N] [-q] 'pattern'"
+func matchFlags(fs *pflag.FlagSet) {
+	fs.Int("count", 0, "Exact count of matches")
+	fs.BoolP("quiet", "q", false, "Suppress printing of matches")
+}
 
 // match implements the Grep, Stdout, and Stderr commands.
 func match(s *State, args []string, text, name string) error {
-	n := 0
-	if len(args) >= 1 && strings.HasPrefix(args[0], "-count=") {
-		var err error
-		n, err = strconv.Atoi(args[0][len("-count="):])
-		if err != nil {
-			return fmt.Errorf("bad -count=: %v", err)
-		}
-		if n < 1 {
-			return fmt.Errorf("bad -count=: must be at least 1")
-		}
-		args = args[1:]
+	n, err := s.Flags.GetInt("count")
+	if err != nil {
+		return err
 	}
-	quiet := false
-	if len(args) >= 1 && args[0] == "-q" {
-		quiet = true
-		args = args[1:]
+	quiet, err := s.Flags.GetBool("quiet")
+	if err != nil {
+		return err
 	}
 
 	isGrep := name == "grep"
@@ -1008,7 +1008,8 @@ func Stderr() Cmd {
 	return Command(
 		CmdUsage{
 			Summary: "find lines in the stderr buffer that match a pattern",
-			Args:    matchUsage + " file",
+			Args:    "'pattern'",
+			Flags:   matchFlags,
 			Detail: []string{
 				"The command succeeds if at least one match (or the exact count, if given) is found.",
 				"The -q flag suppresses printing of matches.",
@@ -1025,7 +1026,8 @@ func Stdout() Cmd {
 	return Command(
 		CmdUsage{
 			Summary: "find lines in the stdout buffer that match a pattern",
-			Args:    matchUsage + " file",
+			Args:    "'pattern'",
+			Flags:   matchFlags,
 			Detail: []string{
 				"The command succeeds if at least one match (or the exact count, if given) is found.",
 				"The -q flag suppresses printing of matches.",
