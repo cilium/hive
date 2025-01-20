@@ -6,6 +6,7 @@ package scripttest_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/cilium/hive/script"
 	"github.com/cilium/hive/script/scripttest"
+	"github.com/spf13/pflag"
 )
 
 func TestAll(t *testing.T) {
@@ -33,6 +35,37 @@ func TestAll(t *testing.T) {
 					return
 				}, nil
 			})
+
+		engine.Cmds["retrytest"] = script.Command(
+			// This is a simple test command to verify that the flags are not
+			// misplaced when retrying a command.
+			script.CmdUsage{
+				Flags: func(fs *pflag.FlagSet) {
+					fs.String("not-empty", "", "this should not be empty")
+				},
+			},
+			func(s *script.State, args ...string) (script.WaitFunc, error) {
+				notEmpty, err := s.Flags.GetString("not-empty")
+				if err != nil {
+					return nil, err
+				}
+				if len(notEmpty) == 0 {
+					return nil, errors.New("not-empty is empty")
+				}
+				if len(args) != 1 || args[0] != "abc" {
+					return nil, errors.New("expected one arg 'abc'")
+				}
+
+				// Check if the file was already created (this command ran already)
+				// otherwise create it so we succeed second time.
+				_, err = os.Stat(s.Path("retrytest"))
+				if err == nil {
+					return nil, nil
+				}
+				os.WriteFile(s.Path("retrytest"), []byte("xxx"), 0644)
+				return nil, errors.New("retrytest")
+			},
+		)
 		return engine
 	}, env, "testdata/*.txt")
 }
