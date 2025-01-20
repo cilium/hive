@@ -1,0 +1,4 @@
+# Test command retrying and the flag parsing when retrying.
+# The 'retrytest' command should run two times and the flags
+# should not be lost.
+* retrytest --not-empty=xyz abc
