@@ -412,6 +412,7 @@ func (e *Engine) ExecuteLine(s *State, line string, log io.Writer) (err error) {
 		}
 	}
 	cmd.args = expandArgs(s, cmd.rawArgs, regexpArgs)
+	cmd.origArgs = cmd.args
 
 	// Run the command.
 	err = e.runCommand(s, cmd, impl)
