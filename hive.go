@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -392,18 +393,18 @@ func (h *Hive) Shutdown(opts ...ShutdownOption) {
 	}
 }
 
-func (h *Hive) PrintObjects() {
-	if err := h.Populate(slog.Default()); err != nil {
+func (h *Hive) PrintObjects(w io.Writer, log *slog.Logger) {
+	if err := h.Populate(log); err != nil {
 		panic(fmt.Sprintf("Failed to populate object graph: %s", err))
 	}
 
-	fmt.Printf("Cells:\n\n")
-	ip := cell.NewInfoPrinter()
+	fmt.Fprintf(w, "Cells:\n\n")
+	ip := cell.NewInfoPrinter(w)
 	for _, c := range h.cells {
 		c.Info(h.container).Print(2, ip)
-		fmt.Println()
+		fmt.Fprintln(w)
 	}
-	h.lifecycle.PrintHooks()
+	h.lifecycle.PrintHooks(w)
 }
 
 func (h *Hive) PrintDotGraph() {
@@ -429,6 +430,8 @@ func (h *Hive) ScriptCommands(log *slog.Logger) (map[string]script.Cmd, error) {
 	}
 	m := map[string]script.Cmd{}
 	m["hive"] = hiveScriptCmd(h, log)
+	m["hive/start"] = hiveStartCmd(h, log)
+	m["hive/stop"] = hiveStopCmd(h, log)
 
 	// Gather the commands from the hive.
 	h.container.Invoke(func(sc ScriptCmds) {
