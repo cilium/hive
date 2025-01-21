@@ -60,16 +60,16 @@ func TestScriptCommands(t *testing.T) {
 	s, err := script.NewState(context.TODO(), "/tmp", nil)
 	require.NoError(t, err, "NewState")
 	script := `
-hive start
+hive/start
 example1
 example2
-hive stop
+hive/stop
 `
 	bio := bufio.NewReader(bytes.NewBufferString(script))
 	var stdout bytes.Buffer
 	err = e.Execute(s, "", bio, &stdout)
 	require.NoError(t, err, "Execute")
 
-	expected := `> hive start.*> example1.*hello1.*> example2.*hello2.*> hive stop`
+	expected := `> hive/start.*> example1.*hello1.*> example2.*hello2.*> hive/stop`
 	require.Regexp(t, expected, strings.ReplaceAll(stdout.String(), "\n", " "))
 }
