@@ -207,6 +207,9 @@ func Test(t *testing.T, ctx context.Context, newEngine func(tb testing.TB, args 
 		file := file
 		wd, _ := os.Getwd()
 		absFile := filepath.Join(wd, file)
+		dataDir := filepath.Dir(absFile)
+		env = slices.Clone(env)
+		env = append(env, fmt.Sprintf("DATADIR=%s", dataDir))
 		name := strings.TrimSuffix(filepath.Base(file), ".txt")
 		t.Run(name, func(t *testing.T) {
 			if !*breakFlag {
