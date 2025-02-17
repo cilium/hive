@@ -22,10 +22,11 @@ func TestAll(t *testing.T) {
 	env := os.Environ()
 	scripttest.Test(t, ctx, func(t testing.TB, scriptArgs []string) *script.Engine {
 		engine := &script.Engine{
-			Conds:         scripttest.DefaultConds(),
-			Cmds:          scripttest.DefaultCmds(),
-			Quiet:         !testing.Verbose(),
-			RetryInterval: 10 * time.Millisecond,
+			Conds:            scripttest.DefaultConds(),
+			Cmds:             scripttest.DefaultCmds(),
+			Quiet:            !testing.Verbose(),
+			RetryInterval:    10 * time.Millisecond,
+			MaxRetryInterval: 100 * time.Millisecond,
 		}
 		engine.Cmds["args"] = script.Command(
 			script.CmdUsage{},
