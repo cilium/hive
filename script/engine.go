@@ -198,6 +198,10 @@ func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Wri
 	if retryInterval == 0 {
 		retryInterval = defaultRetryInterval
 	}
+	maxRetryInterval := e.MaxRetryInterval
+	if maxRetryInterval == 0 {
+		maxRetryInterval = defaultMaxRetryInterval
+	}
 
 	var (
 		sectionStart time.Time
@@ -338,7 +342,7 @@ func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Wri
 			if cmd.want == successRetryOnFailure || cmd.want == failureRetryOnSuccess {
 				// Command wants retries. Retry the whole section
 				numRetries := 0
-				backoff := exponentialBackoff{max: e.MaxRetryInterval, interval: e.RetryInterval}
+				backoff := exponentialBackoff{max: maxRetryInterval, interval: retryInterval}
 				for err != nil {
 					s.FlushLog()
 					retryDuration := backoff.get()
