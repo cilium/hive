@@ -341,12 +341,20 @@ func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Wri
 		err = e.runCommand(s, cmd, impl)
 		if err != nil {
 			if cmd.want == successRetryOnFailure || cmd.want == failureRetryOnSuccess {
+				retryStart := sectionStart
+
+				// Clear the section start to avoid the deferred endSection() printing a timestamp.
+				sectionStart = time.Time{}
+
+				// Append the new line that section start omitted and flush the log.
+				io.WriteString(log, "\n")
+				s.FlushLog()
+
 				// Command wants retries. Retry the whole section
 				backoff := exponentialBackoff{max: maxRetryInterval, interval: retryInterval}
 				for err != nil {
-					s.FlushLog()
 					retryDuration := backoff.get()
-					s.Logf("(command %q failed, retrying in %s...)\n", line, retryDuration)
+					fmt.Fprintf(log, "(command %q failed, retrying in %s...)\n", line, retryDuration)
 					select {
 					case <-s.Context().Done():
 						s.RetryCount = 0
@@ -360,9 +368,11 @@ func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Wri
 							break
 						}
 					}
+					s.FlushLog()
 				}
-				s.Logf("(command %q succeeded after %d retries)\n", line, s.RetryCount)
+				fmt.Fprintf(log, "(command %q succeeded after %d retries in %.3fs)\n", line, s.RetryCount, time.Since(retryStart).Seconds())
 				s.RetryCount = 0
+				return nil
 			} else {
 				if stop := (stopError{}); errors.As(err, &stop) {
 					// Since the 'stop' command halts execution of the entire script,
