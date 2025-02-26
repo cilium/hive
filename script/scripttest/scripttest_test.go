@@ -46,6 +46,7 @@ func TestAll(t *testing.T) {
 				},
 			},
 			func(s *script.State, args ...string) (script.WaitFunc, error) {
+				s.Logf("retrytest called")
 				notEmpty, err := s.Flags.GetString("not-empty")
 				if err != nil {
 					return nil, err
