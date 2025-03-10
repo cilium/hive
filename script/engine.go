@@ -372,7 +372,6 @@ func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Wri
 				}
 				fmt.Fprintf(log, "(command %q succeeded after %d retries in %.3fs)\n", line, s.RetryCount, time.Since(retryStart).Seconds())
 				s.RetryCount = 0
-				return nil
 			} else {
 				if stop := (stopError{}); errors.As(err, &stop) {
 					// Since the 'stop' command halts execution of the entire script,
