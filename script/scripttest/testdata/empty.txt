@@ -1,0 +1,10 @@
+empty isempty
+
+# Test stdout facility
+empty stdout
+
+# Test trim option
+echo
+empty --trim stdout
+
+-- isempty --
