@@ -5,11 +5,13 @@ package job
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 
 	"github.com/cilium/hive/cell"
 	"github.com/cilium/hive/hivetest"
 	"github.com/cilium/stream"
+	"github.com/stretchr/testify/assert"
 )
 
 // This test asserts that an observer job will stop after a stream has been completed.
@@ -18,22 +20,20 @@ func TestObserver_ShortStream(t *testing.T) {
 
 	var (
 		g Group
-		i int
+		i atomic.Int32
 	)
 
 	streamSlice := []string{"a", "b", "c"}
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g = r.NewGroup(s)
+		g = r.NewGroup(s, l)
 
 		g.Add(
 			Observer("retry-fail", func(ctx context.Context, event string) error {
-				i++
+				i.Add(1)
 				return nil
 			}, stream.FromSlice(streamSlice)),
 		)
-
-		l.Append(g)
 	})
 
 	log := hivetest.Logger(t)
@@ -41,15 +41,15 @@ func TestObserver_ShortStream(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Continue as soon as all jobs stopped
-	g.(*group).wg.Wait()
+	assert.Eventually(t,
+		func() bool {
+			return i.Load() == int32(len(streamSlice))
+		},
+		timeout,
+		tick)
 
 	if err := h.Stop(log, context.Background()); err != nil {
 		t.Fatal(err)
-	}
-
-	if i != len(streamSlice) {
-		t.Fatal()
 	}
 }
 
@@ -60,22 +60,20 @@ func TestObserver_LongStream(t *testing.T) {
 
 	var (
 		g Group
-		i int
+		i atomic.Int32
 	)
 
 	inChan := make(chan struct{})
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g = r.NewGroup(s)
+		g = r.NewGroup(s, l)
 
 		g.Add(
 			Observer("retry-fail", func(ctx context.Context, _ struct{}) error {
-				i++
+				i.Add(1)
 				return nil
 			}, stream.FromChannel(inChan)),
 		)
-
-		l.Append(g)
 	})
 
 	log := hivetest.Logger(t)
@@ -87,7 +85,7 @@ func TestObserver_LongStream(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if i != 0 {
+	if i.Load() != 0 {
 		t.Fatal()
 	}
 }
@@ -98,24 +96,22 @@ func TestObserver_CtxClose(t *testing.T) {
 	t.Parallel()
 
 	started := make(chan struct{})
-	i := 0
+	var i atomic.Int32
 	streamSlice := []string{"a", "b", "c"}
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g := r.NewGroup(s)
+		g := r.NewGroup(s, l)
 
 		g.Add(
 			Observer("retry-fail", func(ctx context.Context, event string) error {
-				if i == 0 {
+				if i.Load() == 0 {
 					close(started)
-					i++
+					i.Add(1)
 				}
 				<-ctx.Done()
 				return nil
 			}, stream.FromSlice(streamSlice)),
 		)
-
-		l.Append(g)
 	})
 
 	log := hivetest.Logger(t)

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 
 	"github.com/cilium/hive"
@@ -56,8 +57,8 @@ func TestRegistry(t *testing.T) {
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
 		r1 = r
-		g1 = r.NewGroup(s)
-		g2 = r.NewGroup(s)
+		g1 = r.NewGroup(s, l)
+		g2 = r.NewGroup(s, l)
 	})
 	h.Populate(hivetest.Logger(t))
 
@@ -69,27 +70,34 @@ func TestRegistry(t *testing.T) {
 	}
 }
 
-// This test asserts that jobs are queued, until the hive has been started
-func TestGroup_JobQueue(t *testing.T) {
+// This test asserts that jobs are added to lifecycle before the hive has been started
+func TestGroup_JobPreStart(t *testing.T) {
 	t.Parallel()
 
-	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g := r.NewGroup(s)
-		g.Add(
-			OneShot("queued1", func(ctx context.Context, health cell.Health) error { return nil }),
-			OneShot("queued2", func(ctx context.Context, health cell.Health) error { return nil }),
-		)
-		g.Add(
-			OneShot("queued3", func(ctx context.Context, health cell.Health) error { return nil }),
-			OneShot("queued4", func(ctx context.Context, health cell.Health) error { return nil }),
-		)
-		if len(g.(*group).queuedJobs) != 4 {
-			t.Fatal()
-		}
-		l.Append(g)
-	})
+	var startCount atomic.Int32
+	incFunc := func(ctx context.Context, health cell.Health) error {
+		startCount.Add(1)
+		return nil
+	}
 
-	h.Populate(hivetest.Logger(t))
+	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
+		g := r.NewGroup(s, l)
+		g.Add(
+			OneShot("queued1", incFunc),
+			OneShot("queued2", incFunc),
+		)
+		g.Add(
+			OneShot("queued3", incFunc),
+			OneShot("queued4", incFunc),
+		)
+	})
+	log := hivetest.Logger(t)
+	ctx := context.TODO()
+	require.NoError(t, h.Start(log, ctx))
+	assert.EventuallyWithT(t, func(c *assert.CollectT) {
+		assert.Equal(c, int32(4), startCount.Load())
+	}, timeout, tick)
+	require.NoError(t, h.Stop(log, ctx))
 }
 
 // This test asserts that jobs can be added at runtime.
@@ -102,8 +110,7 @@ func TestGroup_JobRuntime(t *testing.T) {
 	)
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g = r.NewGroup(s)
-		l.Append(g)
+		g = r.NewGroup(s, l)
 	})
 
 	h.Start(slog.Default(), context.Background())
@@ -126,28 +133,47 @@ func TestModuleDecoratedGroup(t *testing.T) {
 	opts := hive.DefaultOptions()
 	opts.ModulePrivateProviders = cell.ModulePrivateProviders{
 		func(r Registry, h cell.Health, modID cell.FullModuleID, l *slog.Logger, lc cell.Lifecycle) Group {
-			g := r.NewGroup(h,
+			g := r.NewGroup(h, lc,
 				WithLogger(l),
 				WithPprofLabels(pprof.Labels("module", modID.String())))
-			lc.Append(g)
 			return g
 		},
 	}
-	callCount := 0
+	var callCount atomic.Int32
 	fn := func(g Group) {
 		g.Add(OneShot("test", func(ctx context.Context, health cell.Health) error {
-			callCount++
+			callCount.Add(1)
 			return nil
 		}))
 	}
+	startOrder := []string{}
+	type X uint32
 	h := hive.NewWithOptions(
 		opts,
 		cell.SimpleHealthCell,
 		Cell,
 		cell.Module("test", "test module",
+			cell.Provide(func(lc cell.Lifecycle) X {
+				lc.Append(cell.Hook{
+					OnStart: func(cell.HookContext) error {
+						// Give the job time to start in case it'll start in the wrong
+						// order.
+						time.Sleep(20 * time.Millisecond)
+						startOrder = append(startOrder, "ctor")
+						return nil
+					},
+				})
+				return 123
+			}),
 			cell.Invoke(fn),
 			cell.Module("nested", "nested module",
 				cell.Invoke(fn),
+				cell.Invoke(func(x X, g Group) {
+					g.Add(OneShot("useX", func(ctx context.Context, health cell.Health) error {
+						startOrder = append(startOrder, "job")
+						return nil
+					}))
+				}),
 			),
 		),
 	)
@@ -155,7 +181,11 @@ func TestModuleDecoratedGroup(t *testing.T) {
 	log := slog.Default()
 	assert.NoError(t, h.Start(log, context.Background()))
 	assert.NoError(t, h.Stop(log, context.Background()))
-	assert.Equal(t, 2, callCount, "expected OneShot function to be called twice")
+	assert.EqualValues(t, 2, callCount.Load(), "expected OneShot function to be called twice")
+
+	// As jobs are appended to the lifecycle when group has not started, the
+	// start hook of the 'X' constructor runs before the job.
+	assert.Equal(t, []string{"ctor", "job"}, startOrder)
 }
 
 func Test_sanitizeName(t *testing.T) {

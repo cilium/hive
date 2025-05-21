@@ -5,6 +5,7 @@ package job
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,23 +21,21 @@ func TestTimer_OnInterval(t *testing.T) {
 	t.Parallel()
 
 	stop := make(chan struct{})
-	i := 0
+	var i atomic.Int32
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g := r.NewGroup(s)
+		g := r.NewGroup(s, l)
 
 		g.Add(
 			Timer("on-interval", func(ctx context.Context) error {
 				// Close the stop channel after 5 invocations.
-				i++
-				if i == 5 {
+				i.Add(1)
+				if i.Load() == 5 {
 					close(stop)
 				}
 				return nil
 			}, 100*time.Millisecond),
 		)
-
-		l.Append(g)
 	})
 
 	log := hivetest.Logger(t)
@@ -57,24 +56,22 @@ func TestTimer_Trigger(t *testing.T) {
 
 	ran := make(chan struct{})
 
-	var i int
+	var i atomic.Int32
 
 	trigger := NewTrigger()
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g := r.NewGroup(s)
+		g := r.NewGroup(s, l)
 
 		g.Add(
 			Timer("on-interval", func(ctx context.Context) error {
 				defer func() { ran <- struct{}{} }()
 
-				i++
+				i.Add(1)
 
 				return nil
 			}, 1*time.Hour, WithTrigger(trigger)),
 		)
-
-		l.Append(g)
 	})
 
 	log := hivetest.Logger(t)
@@ -95,7 +92,7 @@ func TestTimer_Trigger(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if i != 3 {
+	if i.Load() != 3 {
 		t.Fail()
 	}
 }
@@ -106,28 +103,26 @@ func TestTimer_DoubleTrigger(t *testing.T) {
 
 	ran := make(chan struct{})
 
-	var i int
+	var i atomic.Int32
 
 	trigger := NewTrigger()
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g := r.NewGroup(s)
+		g := r.NewGroup(s, l)
 
 		g.Add(
 			Timer("on-interval", func(ctx context.Context) error {
-				defer func(iter int) {
+				defer func(iter int32) {
 					if iter == 0 {
 						close(ran)
 					}
-				}(i)
+				}(i.Load())
 
-				i++
+				i.Add(1)
 
 				return nil
 			}, 1*time.Hour, WithTrigger(trigger)),
 		)
-
-		l.Append(g)
 	})
 
 	// Trigger a few times before we start consuming events, these should coalesce
@@ -146,7 +141,7 @@ func TestTimer_DoubleTrigger(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if i != 1 {
+	if i.Load() != 1 {
 		t.Fail()
 	}
 }
@@ -157,28 +152,26 @@ func TestTimer_TriggerDebounce(t *testing.T) {
 
 	ran := make(chan struct{})
 
-	var i int
+	var i atomic.Int32
 
 	trigger := NewTrigger(WithDebounce(time.Hour))
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g := r.NewGroup(s)
+		g := r.NewGroup(s, l)
 
 		g.Add(
 			Timer("on-interval", func(ctx context.Context) error {
-				defer func(iter int) {
+				defer func(iter int32) {
 					if iter == 0 {
 						close(ran)
 					}
-				}(i)
+				}(i.Load())
 
-				i++
+				i.Add(1)
 
 				return nil
 			}, 1*time.Hour, WithTrigger(trigger)),
 		)
-
-		l.Append(g)
 	})
 
 	// Trigger once before we start consuming events, to run the job immediately after start
@@ -200,7 +193,7 @@ func TestTimer_TriggerDebounce(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if i != 1 {
+	if i.Load() != 1 {
 		t.Fail()
 	}
 }
@@ -211,24 +204,22 @@ func TestTimer_TriggerOnly(t *testing.T) {
 
 	ran := make(chan struct{})
 
-	i := 0
+	var i atomic.Int32
 
 	trigger := NewTrigger()
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g := r.NewGroup(s)
+		g := r.NewGroup(s, l)
 
 		g.Add(
 			Timer("on-interval", func(ctx context.Context) error {
 				defer func() { ran <- struct{}{} }()
 
-				i++
+				i.Add(1)
 
 				return nil
 			}, 0, WithTrigger(trigger)),
 		)
-
-		l.Append(g)
 	})
 
 	log := hivetest.Logger(t)
@@ -249,7 +240,7 @@ func TestTimer_TriggerOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if i != 3 {
+	if i.Load() != 3 {
 		t.Fail()
 	}
 }
@@ -258,18 +249,16 @@ func TestTimer_TriggerOnly(t *testing.T) {
 func TestTimer_ExitOnClose(t *testing.T) {
 	t.Parallel()
 
-	var i int
+	var i atomic.Int32
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g := r.NewGroup(s)
+		g := r.NewGroup(s, l)
 
 		g.Add(
 			Timer("on-interval", func(ctx context.Context) error {
-				i++
+				i.Add(1)
 				return nil
 			}, 1*time.Hour),
 		)
-
-		l.Append(g)
 	})
 
 	log := hivetest.Logger(t)
@@ -281,7 +270,7 @@ func TestTimer_ExitOnClose(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if i != 0 {
+	if i.Load() != 0 {
 		t.Fail()
 	}
 }
@@ -291,14 +280,14 @@ func TestTimer_ExitOnClose(t *testing.T) {
 func TestTimer_ExitOnCloseFnCtx(t *testing.T) {
 	t.Parallel()
 
-	var i int
+	var i atomic.Int32
 	started := make(chan struct{})
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g := r.NewGroup(s)
+		g := r.NewGroup(s, l)
 
 		g.Add(
 			Timer("on-interval", func(ctx context.Context) error {
-				i++
+				i.Add(1)
 				if started != nil {
 					close(started)
 				}
@@ -306,8 +295,6 @@ func TestTimer_ExitOnCloseFnCtx(t *testing.T) {
 				return nil
 			}, 1*time.Millisecond),
 		)
-
-		l.Append(g)
 	})
 
 	log := hivetest.Logger(t)
@@ -321,7 +308,7 @@ func TestTimer_ExitOnCloseFnCtx(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if i != 1 {
+	if i.Load() != 1 {
 		t.Fail()
 	}
 }
