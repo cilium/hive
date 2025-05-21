@@ -6,10 +6,12 @@ package job
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/cilium/hive/cell"
 	"github.com/cilium/hive/hivetest"
@@ -22,7 +24,7 @@ func TestOneShot_ShortRun(t *testing.T) {
 	stop := make(chan struct{})
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g := r.NewGroup(s)
+		g := r.NewGroup(s, l)
 
 		g.Add(
 			OneShot("short", func(ctx context.Context, health cell.Health) error {
@@ -30,8 +32,6 @@ func TestOneShot_ShortRun(t *testing.T) {
 				return nil
 			}),
 		)
-
-		l.Append(g)
 	})
 
 	log := hivetest.Logger(t)
@@ -49,7 +49,7 @@ func TestOneShot_LongRun(t *testing.T) {
 	stopped := make(chan struct{})
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g := r.NewGroup(s)
+		g := r.NewGroup(s, l)
 
 		g.Add(
 			OneShot("long", func(ctx context.Context, health cell.Health) error {
@@ -59,8 +59,6 @@ func TestOneShot_LongRun(t *testing.T) {
 				return nil
 			}),
 		)
-
-		l.Append(g)
 	})
 
 	log := hivetest.Logger(t)
@@ -77,23 +75,21 @@ func TestOneShot_RetryFail(t *testing.T) {
 
 	var (
 		g Group
-		i int
+		i atomic.Int32
 	)
 
 	const retries = 3
 	rateLimiter := &ExponentialBackoff{Min: 10 * time.Millisecond, Max: 20 * time.Millisecond}
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g = r.NewGroup(s)
+		g = r.NewGroup(s, l)
 
 		g.Add(
 			OneShot("retry-fail", func(ctx context.Context, health cell.Health) error {
-				defer func() { i++ }()
+				defer func() { i.Add(1) }()
 				return errors.New("Always error")
 			}, WithRetry(retries, rateLimiter)),
 		)
-
-		l.Append(g)
 	})
 
 	log := hivetest.Logger(t)
@@ -101,17 +97,18 @@ func TestOneShot_RetryFail(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Continue as soon as all jobs stopped
-	g.(*group).wg.Wait()
+	assert.Eventually(t,
+		func() bool {
+			// 1 for the initial run, and 3 retries
+			return i.Load() == retries+1
+		},
+		timeout, tick)
+	assert.EqualValues(t, i.Load(), retries+1, "Retries = %d, Ran = %d", retries, i.Load())
 
 	if err := h.Stop(log, context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
-	// 1 for the initial run, and 3 retries
-	if i != retries+1 {
-		t.Fatalf("Retries = %d, Ran = %d", retries, i)
-	}
 }
 
 // Run the actual test multiple times, as long as 1 out of 5 is good, we accept it, only fail if we are consistently
@@ -136,7 +133,6 @@ func TestOneShot_RetryBackoff(t *testing.T) {
 func testOneShot_RetryBackoff(t *testing.T) (bool, error) {
 	var (
 		g     Group
-		i     int
 		times []time.Time
 	)
 
@@ -150,17 +146,14 @@ func testOneShot_RetryBackoff(t *testing.T) (bool, error) {
 	rateLimiter := &ExponentialBackoff{Min: retryMin, Max: retryMax}
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g = r.NewGroup(s)
+		g = r.NewGroup(s, l)
 
 		g.Add(
 			OneShot("retry-backoff", func(ctx context.Context, health cell.Health) error {
-				defer func() { i++ }()
 				times = append(times, time.Now())
 				return errors.New("Always error")
 			}, WithRetry(retries, rateLimiter)),
 		)
-
-		l.Append(g)
 	})
 
 	log := hivetest.Logger(t)
@@ -200,7 +193,7 @@ func TestOneShot_RetryRecover(t *testing.T) {
 
 	var (
 		g Group
-		i int
+		i atomic.Int32
 	)
 
 	const retries = 3
@@ -208,20 +201,18 @@ func TestOneShot_RetryRecover(t *testing.T) {
 	rateLimiter := &ExponentialBackoff{Min: 10 * time.Millisecond, Max: 20 * time.Millisecond}
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g = r.NewGroup(s)
+		g = r.NewGroup(s, l)
 
 		g.Add(
 			OneShot("retry-recover", func(ctx context.Context, health cell.Health) error {
-				defer func() { i++ }()
-				if i == 0 {
+				defer func() { i.Add(1) }()
+				if i.Load() == 0 {
 					return errors.New("Sometimes error")
 				}
 
 				return nil
 			}, WithRetry(retries, rateLimiter)),
 		)
-
-		l.Append(g)
 	})
 
 	log := hivetest.Logger(t)
@@ -229,16 +220,17 @@ func TestOneShot_RetryRecover(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Continue as soon as all jobs stopped
-	g.(*group).wg.Wait()
+	assert.Eventually(t,
+		func() bool {
+			return i.Load() == 2
+		},
+		timeout, tick,
+		"One shot was invoked after the recovery")
 
 	if err := h.Stop(log, context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
-	if i != 2 {
-		t.Fatal("One shot was invoked after the recovery")
-	}
 }
 
 // This tests asserts that returning an error on a one shot job with the WithShutdown option will shutdown the hive.
@@ -247,15 +239,13 @@ func TestOneShot_Shutdown(t *testing.T) {
 
 	targetErr := errors.New("Always error")
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g := r.NewGroup(s)
+		g := r.NewGroup(s, l)
 
 		g.Add(
 			OneShot("shutdown", func(ctx context.Context, health cell.Health) error {
 				return targetErr
 			}, WithShutdown()),
 		)
-
-		l.Append(g)
 	})
 
 	err := h.Run(hivetest.Logger(t))
@@ -276,7 +266,7 @@ func TestOneShot_RetryFailShutdown(t *testing.T) {
 
 	targetErr := errors.New("Always error")
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g := r.NewGroup(s)
+		g := r.NewGroup(s, l)
 
 		g.Add(
 			OneShot("retry-fail-shutdown", func(ctx context.Context, health cell.Health) error {
@@ -284,8 +274,6 @@ func TestOneShot_RetryFailShutdown(t *testing.T) {
 				return targetErr
 			}, WithRetry(retries, rateLimiter), WithShutdown()),
 		)
-
-		l.Append(g)
 	})
 
 	err := h.Run(hivetest.Logger(t))
@@ -305,7 +293,7 @@ func TestOneShot_RetryRecoverNoShutdown(t *testing.T) {
 
 	var (
 		g Group
-		i int
+		i atomic.Int32
 	)
 
 	started := make(chan struct{})
@@ -313,23 +301,26 @@ func TestOneShot_RetryRecoverNoShutdown(t *testing.T) {
 	const retries = 5
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g = r.NewGroup(s)
-
-		g.Add(
-			OneShot("retry-recover-no-shutdown", func(ctx context.Context, health cell.Health) error {
-				defer func() { i++ }()
-
-				if i == 0 {
-					close(started)
-					return errors.New("First try error")
-				}
-
-				return nil
-			}, WithRetry(retries, ConstantBackoff(time.Millisecond)), WithShutdown()),
-		)
-
-		l.Append(g)
+		g = r.NewGroup(s, l)
 	})
+
+	log := hivetest.Logger(t)
+	ctx := context.TODO()
+	require.NoError(t, h.Start(log, ctx))
+
+	// Add the job dynamically.
+	g.Add(
+		OneShot("retry-recover-no-shutdown", func(ctx context.Context, health cell.Health) error {
+			defer func() { i.Add(1) }()
+
+			if i.Load() == 0 {
+				close(started)
+				return errors.New("First try error")
+			}
+
+			return nil
+		}, WithRetry(retries, ConstantBackoff(time.Millisecond)), WithShutdown()),
+	)
 
 	shutdown := make(chan struct{})
 
@@ -341,16 +332,8 @@ func TestOneShot_RetryRecoverNoShutdown(t *testing.T) {
 		close(shutdown)
 	}()
 
-	err := h.Run(hivetest.Logger(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if i != 2 {
-		t.Fail()
-	}
-
 	<-shutdown
+	require.Equal(t, int32(2), i.Load())
 }
 
 // This test asserts that when the WithRetry option is used, retries are not
@@ -360,7 +343,7 @@ func TestOneShot_RetryWhileShuttingDown(t *testing.T) {
 
 	var (
 		g    Group
-		runs int
+		runs atomic.Int32
 	)
 
 	const retries = 5
@@ -369,21 +352,19 @@ func TestOneShot_RetryWhileShuttingDown(t *testing.T) {
 	shutdown := make(chan struct{})
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g = r.NewGroup(s)
+		g = r.NewGroup(s, l)
 
 		g.Add(
 			OneShot("retry-context-closed", func(ctx context.Context, health cell.Health) error {
-				if runs == 0 {
+				if runs.Load() == 0 {
 					close(started)
 				}
 
-				runs++
+				runs.Add(1)
 				<-ctx.Done()
 				return ctx.Err()
 			}, WithRetry(retries, rateLimiter)),
 		)
-
-		l.Append(g)
 	})
 
 	go func() {
@@ -394,7 +375,7 @@ func TestOneShot_RetryWhileShuttingDown(t *testing.T) {
 	}()
 
 	assert.NoError(t, h.Run(hivetest.Logger(t)))
-	assert.Equal(t, 1, runs, "The job function should not have been retried after that the context expired")
+	assert.EqualValues(t, 1, runs.Load(), "The job function should not have been retried after that the context expired")
 
 	<-shutdown
 }
