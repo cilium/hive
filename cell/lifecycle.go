@@ -90,10 +90,14 @@ func NewDefaultLifecycle(hooks []HookInterface, numStarted int, logThreshold tim
 }
 
 func (lc *DefaultLifecycle) Append(hook HookInterface) {
+	lc.AppendWithModuleID(hook, nil)
+}
+
+func (lc *DefaultLifecycle) AppendWithModuleID(hook HookInterface, mid FullModuleID) {
 	lc.mu.Lock()
 	defer lc.mu.Unlock()
 
-	lc.hooks = append(lc.hooks, augmentedHook{hook, nil})
+	lc.hooks = append(lc.hooks, augmentedHook{hook, mid})
 }
 
 func (lc *DefaultLifecycle) Start(log *slog.Logger, ctx context.Context) error {
@@ -209,10 +213,7 @@ type augmentedLifecycle struct {
 }
 
 func (lc augmentedLifecycle) Append(hook HookInterface) {
-	lc.mu.Lock()
-	defer lc.mu.Unlock()
-
-	lc.hooks = append(lc.hooks, augmentedHook{hook, lc.moduleID})
+	lc.AppendWithModuleID(hook, lc.moduleID)
 }
 
 func getHookFuncName(hook HookInterface, start bool) (name string, hasHook bool) {
