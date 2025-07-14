@@ -1,6 +1,6 @@
 module github.com/cilium/hive
 
-go 1.21.3
+go 1.23.0
 
 require (
 	github.com/cilium/stream v0.0.0-20240209152734-a0792b51812d
