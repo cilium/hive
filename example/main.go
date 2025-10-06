@@ -4,6 +4,8 @@
 package main
 
 import (
+	"fmt"
+	"io"
 	"log/slog"
 	"os"
 
@@ -12,13 +14,17 @@ import (
 	"github.com/cilium/hive"
 	"github.com/cilium/hive/cell"
 	"github.com/cilium/hive/job"
+	"github.com/cilium/hive/shell"
 )
+
+const exampleShellSocketPath = "/tmp/example-shell.sock"
 
 var (
 	// Create a hive from a set of cells.
 	Hive = hive.New(
 		cell.SimpleHealthCell,
 		job.Cell,
+		shell.ServerCell(exampleShellSocketPath),
 
 		cell.Module(
 			"example",
@@ -78,7 +84,8 @@ var (
 	//   ...
 	//   example> hive stop
 	replCmd = &cobra.Command{
-		Use: "repl",
+		Use:   "repl",
+		Short: "Run the Hive repl for the example application",
 		Run: func(_ *cobra.Command, args []string) {
 			hive.RunRepl(Hive, os.Stdin, os.Stdout, "example> ")
 		},
@@ -95,9 +102,21 @@ func main() {
 
 		// Add the "repl" command to interactively run the application.
 		replCmd,
+
+		// Add the shell client command.
+		//
+		// After starting the application ("go run ./example") you can connect
+		// to the shell with "go run ./example shell"
+		shell.ShellCmd(exampleShellSocketPath, "example> ", shellGreeting),
 	)
 
 	// And finally execute the command to parse the command-line flags and
 	// run the hive
 	cmd.Execute()
+}
+
+func shellGreeting(w io.Writer) {
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "... Welcome to the example application shell ...\n")
+	fmt.Fprintln(w)
 }
