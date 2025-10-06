@@ -424,6 +424,86 @@ func TestShutdown(t *testing.T) {
 	assert.ErrorIs(t, h.Run(hivetest.Logger(t)), shutdownErr, "expected Run() to fail with shutdownErr")
 }
 
+func TestTimeoutOverride(t *testing.T) {
+	var started, stopped int
+	opts := hive.DefaultOptions()
+
+	newStartTimeout := 3*time.Millisecond
+	newStopTimeout := 2*time.Millisecond
+
+	h := hive.NewWithOptions(
+		opts,
+		cell.Invoke(func(lc cell.Lifecycle, shutdowner hive.Shutdowner) {
+			lc.Append(cell.Hook{
+				OnStart: func(ctx cell.HookContext) error {
+					started ++
+
+					deadline, ok := ctx.Deadline()
+					assert.True(t, ok, "expected start context to have a deadline")
+
+					timeToDeadline := time.Until(deadline)
+					assert.LessOrEqual(t, timeToDeadline, newStartTimeout, "expected time to start context deadline be less or equal than the overridden timeout")
+
+					shutdowner.Shutdown()
+					return nil
+				},
+				OnStop: func(ctx cell.HookContext) error {
+					stopped ++
+
+					deadline, ok := ctx.Deadline()
+					assert.True(t, ok, "expexted stop context to have a deadline")
+
+					timeToDeadline := time.Until(deadline)
+					assert.LessOrEqual(t, timeToDeadline, newStopTimeout, "expected time to stop context deadline be less or equal than the overridden timeout")
+
+					return nil
+				},
+			})
+		}),
+	)
+
+	err := h.Run(
+		hivetest.Logger(t),
+		hive.WithStartTimeout(newStartTimeout),
+		hive.WithStopTimeout(newStopTimeout),
+	)
+
+	assert.NoError(t, err, "expected Run() to succeed")
+
+	assert.Equal(t, 1, started)
+	assert.Equal(t, 1, stopped)
+}
+
+func TestLogThresholdOverride(t *testing.T) {
+	invoked := false
+	newLogThreshold := time.Millisecond
+
+	h := hive.New(
+		cell.Invoke(func(lc cell.Lifecycle, shutdowner hive.Shutdowner) {
+			lc.Append(cell.Hook{
+				OnStart: func(cell.HookContext) error {
+					shutdowner.Shutdown()
+					return nil
+				}})
+		}),
+	)
+
+	h.AppendInvoke(func(_ *slog.Logger, threshold time.Duration) error {
+		invoked = true
+		assert.Equal(t, newLogThreshold, threshold, "expected logThreshold to be equal to overridden value")
+		return nil
+	})
+
+	err := h.Run(
+		hivetest.Logger(t),
+		hive.WithLogThreshold(newLogThreshold),
+	)
+
+	assert.NoError(t, err, "expected Run() to succeed")
+
+	assert.True(t, invoked)
+}
+
 func TestRunRollback(t *testing.T) {
 	var started, stopped int
 	opts := hive.DefaultOptions()
