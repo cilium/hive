@@ -5,6 +5,7 @@
 package script
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -21,9 +22,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cilium/hive/script/internal/diff"
+	"github.com/jmespath/go-jmespath"
 	"github.com/spf13/pflag"
 	"golang.org/x/term"
+	"sigs.k8s.io/yaml"
+
+	"github.com/cilium/hive/script/internal/diff"
 )
 
 // DefaultCmds returns a set of broadly useful script commands.
@@ -57,6 +61,8 @@ func DefaultCmds() map[string]Cmd {
 		"symlink": Symlink(),
 		"wait":    Wait(),
 		"break":   Break(),
+		"json":    Json(),
+		"yaml":    Yaml(),
 	}
 }
 
@@ -1575,3 +1581,104 @@ func dirEntryIsExec(entry os.DirEntry) bool {
 	}
 	return info.Mode()&execAny != 0
 }
+
+func Json() Cmd {
+	return jsonOrYaml(false)
+}
+
+func Yaml() Cmd {
+	return jsonOrYaml(true)
+}
+
+func jsonOrYaml(yamlMode bool) Cmd {
+	which := "JSON"
+	if yamlMode {
+		which = "YAML"
+	}
+	return Command(
+		CmdUsage{
+			Summary: "Transform a "+which+" document with a JMESPath expression",
+			Args:    "expression",
+			Detail: []string{
+				"See https://jmespath.org/tutorial.html for tutorial on JMESPath expressions.",
+			},
+			Flags: func(fs *pflag.FlagSet) {
+				fs.StringP("input", "i", "", "File to read from instead of stdout buffer")
+				fs.StringP("output", "o", "", "File to write to instead of stdout buffer")
+				fs.BoolP("quiet", "q", false, "Do not output the transformed document")
+				fs.BoolP("fail", "f", false, "Fail on null (no match)")
+			},
+		},
+		func(s *State, args ...string) (WaitFunc, error) {
+			if len(args) != 1 {
+				return nil, fmt.Errorf("%s: expected expression", ErrUsage)
+			}
+			expr := args[0]
+			return func(s *State) (stdout string, stderr string, err error) {
+				input := []byte(s.Stdout())
+				if inputFile, err := s.Flags.GetString("input"); err != nil {
+					return "", "", err
+				} else if inputFile != "" {
+					b, err := os.ReadFile(s.Path(inputFile))
+					if err != nil {
+						return "", "", err
+					}
+					input = b
+				}
+
+				if yamlMode {
+					input, err = yaml.YAMLToJSON(input)
+					if err != nil {
+						return "", "", err
+					}
+				}
+
+				var data any
+				if err := json.Unmarshal(input, &data); err != nil {
+					return "", "", err
+				}
+				result, err := jmespath.Search(expr, data)
+				if err != nil {
+					return "", "", err
+				}
+
+				if fail, err := s.Flags.GetBool("fail"); err != nil {
+					return "", "", err
+				} else if fail && result == nil {
+					return "", "", errors.New("No match")
+				}
+
+				if quiet, err := s.Flags.GetBool("quiet"); err != nil {
+					return "", "", err
+				} else if quiet {
+					return "", "", nil
+				}
+
+				var out []byte
+				if yamlMode {
+					out, err = yaml.Marshal(result)
+					if err != nil {
+						return "", "", err
+					}
+				} else {
+					out, err = json.Marshal(result)
+					if err != nil {
+						return "", "", err
+					}
+				}
+
+				if outputFile, err := s.Flags.GetString("output"); err != nil {
+					return "", "", err
+				} else if outputFile != "" {
+					err := os.WriteFile(s.Path(outputFile), out, 0644)
+					return "", "", err
+				}
+
+				return string(out), "", nil
+			}, nil
+
+		},
+	)
+}
+
+
