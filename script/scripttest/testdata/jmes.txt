@@ -1,0 +1,39 @@
+# Tests for the json/yaml commands for transforming a JSON/YAML document using
+# a JMESPath expression.
+
+# stdout
+echo '{"a": "b"}'
+json a
+stdout "b"
+
+echo 'a: b'
+yaml a
+stdout b
+
+# from input file
+json -i test.json a
+stdout ^{"aa":"foo"}$
+
+json -i test.json a.aa
+stdout "foo"
+
+json -i test.json c[?v>`1`].v
+stdout [2]
+
+yaml -i test.yaml c[?v>`1`].v
+stdout '\- 2'
+
+# fail when no matches
+! json --fail --input test.json 'c[2]'
+! json --fail --input test.json 'd'
+
+-- test.json --
+{"a": {"aa": "foo"}, "b": 10, "c": [{"v": 1}, {"v": 2}]}
+
+-- test.yaml --
+a:
+  aa: foo
+b: 10
+c:
+  - v: 1
+  - v: 2
