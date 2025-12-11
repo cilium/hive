@@ -114,7 +114,8 @@ func (lc *DefaultLifecycle) Start(log *slog.Logger, ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	for i, hook := range lc.hooks {
+	from := lc.numStarted
+	for i, hook := range lc.hooks[from:] {
 		fnName, exists := getHookFuncName(hook, true)
 
 		if !exists {
@@ -130,7 +131,7 @@ func (lc *DefaultLifecycle) Start(log *slog.Logger, ctx context.Context) error {
 		}
 
 		// Do not attempt to start already started hooks.
-		if i < lc.numStarted {
+		if from+i < lc.numStarted {
 			l.Error("Hook appears to be running. Skipping")
 			continue
 		}
