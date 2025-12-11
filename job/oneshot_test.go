@@ -164,6 +164,8 @@ func testOneShot_RetryBackoff(t *testing.T) (bool, error) {
 	}
 
 	require.Eventually(t, func() bool {
+		timesMu.Lock()
+		defer timesMu.Unlock()
 		return len(times) == retries+1
 	}, timeout, tick)
 
