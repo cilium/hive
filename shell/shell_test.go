@@ -46,7 +46,7 @@ func fixture(t *testing.T, cfg Config) {
 		cell.SimpleHealthCell,
 		cell.Provide(
 			func(r job.Registry, lc cell.Lifecycle, health cell.Health) job.Group {
-				return r.NewGroup(health, lc)
+				return r.NewGroup(health)
 			},
 		),
 		ServerCell(cfg.ShellSockPath),

@@ -26,7 +26,7 @@ func TestObserver_ShortStream(t *testing.T) {
 	streamSlice := []string{"a", "b", "c"}
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g = r.NewGroup(s, l)
+		g = r.NewGroup(s)
 
 		g.Add(
 			Observer("retry-fail", func(ctx context.Context, event string) error {
@@ -66,7 +66,7 @@ func TestObserver_LongStream(t *testing.T) {
 	inChan := make(chan struct{})
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g = r.NewGroup(s, l)
+		g = r.NewGroup(s)
 
 		g.Add(
 			Observer("retry-fail", func(ctx context.Context, _ struct{}) error {
@@ -100,7 +100,7 @@ func TestObserver_CtxClose(t *testing.T) {
 	streamSlice := []string{"a", "b", "c"}
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g := r.NewGroup(s, l)
+		g := r.NewGroup(s)
 
 		g.Add(
 			Observer("retry-fail", func(ctx context.Context, event string) error {
