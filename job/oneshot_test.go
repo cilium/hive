@@ -6,6 +6,7 @@ package job
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -132,8 +133,9 @@ func TestOneShot_RetryBackoff(t *testing.T) {
 // This test asserts that the one shot jobs have a delay equal to the expected behavior of the passed in ratelimiter.
 func testOneShot_RetryBackoff(t *testing.T) (bool, error) {
 	var (
-		g     Group
-		times []time.Time
+		g       Group
+		times   []time.Time
+		timesMu sync.Mutex
 	)
 
 	failed := false
@@ -148,12 +150,12 @@ func testOneShot_RetryBackoff(t *testing.T) (bool, error) {
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
 		g = r.NewGroup(s)
 
-		g.Add(
-			OneShot("retry-backoff", func(ctx context.Context, health cell.Health) error {
-				times = append(times, time.Now())
-				return errors.New("Always error")
-			}, WithRetry(retries, rateLimiter)),
-		)
+		g.Add(OneShot("retry-backoff", func(ctx context.Context, health cell.Health) error {
+			timesMu.Lock()
+			times = append(times, time.Now())
+			timesMu.Unlock()
+			return errors.New("Always error")
+		}, WithRetry(retries, rateLimiter)))
 	})
 
 	log := hivetest.Logger(t)
@@ -162,6 +164,8 @@ func testOneShot_RetryBackoff(t *testing.T) (bool, error) {
 	}
 
 	require.Eventually(t, func() bool {
+		timesMu.Lock()
+		defer timesMu.Unlock()
 		return len(times) == retries+1
 	}, timeout, tick)
 
@@ -169,9 +173,13 @@ func testOneShot_RetryBackoff(t *testing.T) (bool, error) {
 		return true, err
 	}
 
+	timesMu.Lock()
+	copied := append([]time.Time(nil), times...)
+	timesMu.Unlock()
+
 	var last time.Duration
-	for i := 1; i < len(times); i++ {
-		diff := times[i].Sub(times[i-1])
+	for i := 1; i < len(copied); i++ {
+		diff := copied[i].Sub(copied[i-1])
 		if i > 2 {
 			// Test that the rate of change is 2x (+- 50%, the 50% to account for CI time dilation).
 			// The 10 factor is to add avoid integer rounding.
