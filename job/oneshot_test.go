@@ -25,7 +25,7 @@ func TestOneShot_ShortRun(t *testing.T) {
 	stop := make(chan struct{})
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g := r.NewGroup(s, l)
+		g := r.NewGroup(s)
 
 		g.Add(
 			OneShot("short", func(ctx context.Context, health cell.Health) error {
@@ -50,7 +50,7 @@ func TestOneShot_LongRun(t *testing.T) {
 	stopped := make(chan struct{})
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g := r.NewGroup(s, l)
+		g := r.NewGroup(s)
 
 		g.Add(
 			OneShot("long", func(ctx context.Context, health cell.Health) error {
@@ -83,7 +83,7 @@ func TestOneShot_RetryFail(t *testing.T) {
 	rateLimiter := &ExponentialBackoff{Min: 10 * time.Millisecond, Max: 20 * time.Millisecond}
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g = r.NewGroup(s, l)
+		g = r.NewGroup(s)
 
 		g.Add(
 			OneShot("retry-fail", func(ctx context.Context, health cell.Health) error {
@@ -148,7 +148,7 @@ func testOneShot_RetryBackoff(t *testing.T) (bool, error) {
 	rateLimiter := &ExponentialBackoff{Min: retryMin, Max: retryMax}
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g = r.NewGroup(s, l)
+		g = r.NewGroup(s)
 
 		g.Add(OneShot("retry-backoff", func(ctx context.Context, health cell.Health) error {
 			timesMu.Lock()
@@ -163,8 +163,9 @@ func testOneShot_RetryBackoff(t *testing.T) (bool, error) {
 		return true, err
 	}
 
-	// Continue as soon as all jobs stopped
-	g.(*group).wg.Wait()
+	require.Eventually(t, func() bool {
+		return len(times) == retries+1
+	}, timeout, tick)
 
 	if err := h.Stop(log, context.Background()); err != nil {
 		return true, err
@@ -207,7 +208,7 @@ func TestOneShot_RetryRecover(t *testing.T) {
 	rateLimiter := &ExponentialBackoff{Min: 10 * time.Millisecond, Max: 20 * time.Millisecond}
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g = r.NewGroup(s, l)
+		g = r.NewGroup(s)
 
 		g.Add(
 			OneShot("retry-recover", func(ctx context.Context, health cell.Health) error {
@@ -245,7 +246,7 @@ func TestOneShot_Shutdown(t *testing.T) {
 
 	targetErr := errors.New("Always error")
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g := r.NewGroup(s, l)
+		g := r.NewGroup(s)
 
 		g.Add(
 			OneShot("shutdown", func(ctx context.Context, health cell.Health) error {
@@ -272,7 +273,7 @@ func TestOneShot_RetryFailShutdown(t *testing.T) {
 
 	targetErr := errors.New("Always error")
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g := r.NewGroup(s, l)
+		g := r.NewGroup(s)
 
 		g.Add(
 			OneShot("retry-fail-shutdown", func(ctx context.Context, health cell.Health) error {
@@ -307,7 +308,7 @@ func TestOneShot_RetryRecoverNoShutdown(t *testing.T) {
 	const retries = 5
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g = r.NewGroup(s, l)
+		g = r.NewGroup(s)
 	})
 
 	log := hivetest.Logger(t)
@@ -315,9 +316,15 @@ func TestOneShot_RetryRecoverNoShutdown(t *testing.T) {
 	require.NoError(t, h.Start(log, ctx))
 
 	// Add the job dynamically.
+	jobDone := make(chan struct{})
+
 	g.Add(
 		OneShot("retry-recover-no-shutdown", func(ctx context.Context, health cell.Health) error {
-			defer func() { i.Add(1) }()
+			defer func() {
+				if i.Add(1) == 2 {
+					close(jobDone)
+				}
+			}()
 
 			if i.Load() == 0 {
 				close(started)
@@ -333,7 +340,7 @@ func TestOneShot_RetryRecoverNoShutdown(t *testing.T) {
 	// Manually trigger a shutdown after the group has no more running jobs, will exit the hive with a nil
 	go func() {
 		<-started
-		g.(*group).wg.Wait()
+		<-jobDone
 		h.Shutdown()
 		close(shutdown)
 	}()
@@ -358,7 +365,7 @@ func TestOneShot_RetryWhileShuttingDown(t *testing.T) {
 	shutdown := make(chan struct{})
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g = r.NewGroup(s, l)
+		g = r.NewGroup(s)
 
 		g.Add(
 			OneShot("retry-context-closed", func(ctx context.Context, health cell.Health) error {
