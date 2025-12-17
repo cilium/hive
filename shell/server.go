@@ -173,15 +173,17 @@ func (sh shell) handleConn(ctx context.Context, clientID int, conn net.Conn) {
 		}
 		err = sh.engine.ExecuteLine(s, line, writer)
 		if err != nil {
-			_, err = fmt.Fprintln(writer, err)
+			// Send the error and the error marker
+			_, err = fmt.Fprintf(writer, "%s%s\n", err, errorMarker)
 			if err != nil {
 				break
 			}
-		}
-		// Send the "end of command output" marker
-		_, err = fmt.Fprintln(writer, endMarker)
-		if err != nil {
-			break
+		} else {
+			// Send the "end of command output" marker
+			_, err = fmt.Fprintln(writer, endMarker)
+			if err != nil {
+				break
+			}
 		}
 	}
 }

@@ -27,8 +27,14 @@ var client = flag.String("client", "", "Act as client to given unix socket")
 func TestMain(m *testing.M) {
 	flag.Parse()
 	if *client != "" {
-		interactiveShell(Config{ShellSockPath: *client}, "test> ", nil)
-		return
+		cfg := Config{ShellSockPath: *client}
+		args := flag.Args()
+		if len(args) > 0 {
+			executeShell(cfg, "test> ", nil, args)
+		} else {
+			interactiveShell(cfg, "test> ", nil)
+			return
+		}
 	} else {
 		os.Exit(m.Run())
 	}
@@ -75,6 +81,9 @@ func TestShellExchange(t *testing.T) {
 	err := ShellExchange(cfg, &buf, "help")
 	assert.NoError(t, err, "ShellExchangeWithConfig")
 	assert.Contains(t, buf.String(), "commands:")
+
+	err = ShellExchange(cfg, &buf, "unknown")
+	assert.ErrorContains(t, err, "unknown: unknown command")
 }
 
 func TestInteractiveShell(t *testing.T) {
@@ -82,6 +91,7 @@ func TestInteractiveShell(t *testing.T) {
 	cfg := Config{sock}
 	fixture(t, cfg)
 
+	// Interactive use
 	cmd := exec.Command(os.Args[0], "-client", sock)
 	cmd.Stdin = strings.NewReader("help help\r\nexit\r\n")
 	out, err := cmd.CombinedOutput()
@@ -89,4 +99,10 @@ func TestInteractiveShell(t *testing.T) {
 
 	require.Contains(t, string(out), "test> help help")
 	require.Contains(t, string(out), "log help text")
+
+	// Non-interactive with failure
+	cmd = exec.Command(os.Args[0], "-client", sock, "unknown")
+	out, err = cmd.CombinedOutput()
+	require.Contains(t, string(out), "unknown: unknown command")
+	require.ErrorContains(t, err, "exit status 1")
 }
