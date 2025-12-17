@@ -110,8 +110,8 @@ func (sh shell) listener(ctx context.Context, health cell.Health) error {
 }
 
 func (sh shell) handleConn(ctx context.Context, clientID int, conn net.Conn) {
-	sh.log.Info("Client connected", "id", clientID)
-	defer sh.log.Info("client disconnected", "id", clientID)
+	sh.log.Debug("Client connected", "id", clientID)
+	defer sh.log.Debug("client disconnected", "id", clientID)
 
 	ctx, cancel := context.WithCancel(ctx)
 
