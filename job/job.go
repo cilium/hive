@@ -31,10 +31,15 @@ var Cell = cell.Module(
 // A Registry creates Groups, it maintains references to these groups for the purposes of collecting information
 // centralized like metrics.
 type Registry interface {
-	// NewGroup creates a new group of jobs which can be started and stopped together as part of the cells lifecycle.
-	// The provided scope is used to report health status of the jobs. A `cell.Scope` can be obtained via injection
-	// an object with the correct scope is provided by the closest `cell.Module`.
-	NewGroup(health cell.Health, opts ...groupOpt) Group
+	// NewGroup creates a new Group with the given `opts` options, which allows you to customize the behavior for the
+	// group as a whole. For example by allowing you to add pprof labels to the group or by customizing the logger.
+	//
+	// Jobs added to the group before it is started will be appended to the registry's lifecycle.
+	// Jobs added after starting are started immediately and stopped sequentially in reverse order
+	// when registry is stopped.
+	//
+	// The lifecycle is no longer used but kept for backwards compatibility.
+	NewGroup(health cell.Health, _ cell.Lifecycle, opts ...groupOpt) Group
 }
 
 type registry struct {
@@ -94,7 +99,9 @@ func (c *registry) Stop(ctx cell.HookContext) error {
 // Jobs added to the group before it is started will be appended to the registry's lifecycle.
 // Jobs added after starting are started immediately and stopped sequentially in reverse order
 // when registry is stopped.
-func (c *registry) NewGroup(health cell.Health, opts ...groupOpt) Group {
+//
+// The lifecycle is no longer used but kept for backwards compatibility.
+func (c *registry) NewGroup(health cell.Health, _ cell.Lifecycle, opts ...groupOpt) Group {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
