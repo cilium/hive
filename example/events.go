@@ -84,7 +84,7 @@ func newExampleEvents(lc cell.Lifecycle, jobs job.Registry, health cell.Health) 
 	es.Observable, es.emit, es.complete = stream.Multicast[ExampleEvent]()
 
 	// Create a new job group and add emitter as a one-shot job.
-	g := jobs.NewGroup(health)
+	g := jobs.NewGroup(health, lc)
 	g.Add(job.OneShot("emitter", es.emitter))
 	return es
 }
