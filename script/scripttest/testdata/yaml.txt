@@ -1,0 +1,17 @@
+yq pets.yaml '$.info.labels'
+cmp stdout labels.yaml
+-- labels.yaml --
+  labels:
+    foo: bar
+-- pets.yaml --
+info: 
+  name: "pets"
+  desc: "info about pets"
+  version: 7
+  labels:
+    foo: bar
+dogs:
+- "spot"
+- "jeff"
+cats:
+- "mittens"
