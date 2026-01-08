@@ -59,8 +59,8 @@ func TestRegistry(t *testing.T) {
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
 		r1 = r
-		g1 = r.NewGroup(s, l)
-		g2 = r.NewGroup(s, l)
+		g1 = r.NewGroup(s)
+		g2 = r.NewGroup(s)
 	})
 	h.Populate(hivetest.Logger(t))
 
@@ -83,7 +83,7 @@ func TestGroup_JobPreStart(t *testing.T) {
 	}
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g := r.NewGroup(s, l)
+		g := r.NewGroup(s)
 		g.Add(
 			OneShot("queued1", incFunc),
 			OneShot("queued2", incFunc),
@@ -112,7 +112,7 @@ func TestGroup_JobRuntime(t *testing.T) {
 	)
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g = r.NewGroup(s, l)
+		g = r.NewGroup(s)
 	})
 
 	h.Start(slog.Default(), context.Background())
@@ -148,8 +148,8 @@ func TestJobLifecycleOrderingAcrossGroups(t *testing.T) {
 	}
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g1 = r.NewGroup(s, l)
-		g2 = r.NewGroup(s, l)
+		g1 = r.NewGroup(s)
+		g2 = r.NewGroup(s)
 
 		addJob(g1, "g1-first")
 		addJob(g1, "g1-second")
@@ -185,7 +185,7 @@ func TestModuleDecoratedGroup(t *testing.T) {
 	opts := hive.DefaultOptions()
 	opts.ModulePrivateProviders = cell.ModulePrivateProviders{
 		func(r Registry, h cell.Health, modID cell.FullModuleID, l *slog.Logger, lc cell.Lifecycle) Group {
-			g := r.NewGroup(h, lc,
+			g := r.NewGroup(h,
 				WithLogger(l),
 				WithPprofLabels(pprof.Labels("module", modID.String())))
 			return g
