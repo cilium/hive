@@ -6,7 +6,6 @@ package job
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"time"
 
@@ -145,11 +144,9 @@ type jobTimer struct {
 	shutdown hive.Shutdowner
 }
 
-func (jt *jobTimer) info() string {
-	return fmt.Sprintf("%s (%s)", jt.name, internal.FuncNameAndLocation(jt.fn))
-}
+func (jt *jobTimer) start(ctx context.Context, wg *sync.WaitGroup, health cell.Health, options options) {
+	defer wg.Done()
 
-func (jt *jobTimer) start(ctx context.Context, health cell.Health, options options) {
 	for _, opt := range jt.opts {
 		opt(jt)
 	}

@@ -24,7 +24,7 @@ func TestTimer_OnInterval(t *testing.T) {
 	var i atomic.Int32
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g := r.NewGroup(s)
+		g := r.NewGroup(s, l)
 
 		g.Add(
 			Timer("on-interval", func(ctx context.Context) error {
@@ -61,7 +61,7 @@ func TestTimer_Trigger(t *testing.T) {
 	trigger := NewTrigger()
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g := r.NewGroup(s)
+		g := r.NewGroup(s, l)
 
 		g.Add(
 			Timer("on-interval", func(ctx context.Context) error {
@@ -108,7 +108,7 @@ func TestTimer_DoubleTrigger(t *testing.T) {
 	trigger := NewTrigger()
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g := r.NewGroup(s)
+		g := r.NewGroup(s, l)
 
 		g.Add(
 			Timer("on-interval", func(ctx context.Context) error {
@@ -157,7 +157,7 @@ func TestTimer_TriggerDebounce(t *testing.T) {
 	trigger := NewTrigger(WithDebounce(time.Hour))
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g := r.NewGroup(s)
+		g := r.NewGroup(s, l)
 
 		g.Add(
 			Timer("on-interval", func(ctx context.Context) error {
@@ -209,7 +209,7 @@ func TestTimer_TriggerOnly(t *testing.T) {
 	trigger := NewTrigger()
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g := r.NewGroup(s)
+		g := r.NewGroup(s, l)
 
 		g.Add(
 			Timer("on-interval", func(ctx context.Context) error {
@@ -251,7 +251,7 @@ func TestTimer_ExitOnClose(t *testing.T) {
 
 	var i atomic.Int32
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g := r.NewGroup(s)
+		g := r.NewGroup(s, l)
 
 		g.Add(
 			Timer("on-interval", func(ctx context.Context) error {
@@ -283,7 +283,7 @@ func TestTimer_ExitOnCloseFnCtx(t *testing.T) {
 	var i atomic.Int32
 	started := make(chan struct{})
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
-		g := r.NewGroup(s)
+		g := r.NewGroup(s, l)
 
 		g.Add(
 			Timer("on-interval", func(ctx context.Context) error {
