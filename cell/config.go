@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 
 	"github.com/cilium/hive/internal"
 	"github.com/mitchellh/mapstructure"
@@ -49,6 +50,10 @@ type Flagger interface {
 // flags and provides the parsed config to the hive.
 type config[Cfg Flagger] struct {
 	defaultConfig Cfg
+
+	infoMu sync.Mutex
+	info   *dig.ProvideInfo
+	ctor   any
 }
 
 type AllSettings map[string]any
@@ -166,11 +171,20 @@ func (c *config[Cfg]) Apply(cont container, _ rootContainer) error {
 	if err != nil {
 		return err
 	}
-	// And provide the constructor for the config.
-	return cont.Provide(
-		provideConfig(c.defaultConfig, flags),
-		dig.Export(true),
-	)
+	ctor := provideConfig(c.defaultConfig, flags)
+
+	c.infoMu.Lock()
+	opts := []dig.ProvideOption{dig.Export(true)}
+	if c.info == nil {
+		c.info = &dig.ProvideInfo{}
+		opts = append(opts, dig.FillProvideInfo(c.info))
+	}
+	if c.ctor == nil {
+		c.ctor = ctor
+	}
+	err = cont.Provide(ctor, opts...)
+	c.infoMu.Unlock()
+	return err
 }
 
 func (c *config[Cfg]) Info(cont container) (info Info) {
