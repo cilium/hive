@@ -34,6 +34,7 @@ body {
   gap: 16px;
   padding: 16px;
   height: 100vh;
+  min-height: 0;
 }
 
 .brand {
@@ -71,12 +72,14 @@ body {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-height: 0;
 }
 
 #module-list {
   flex: 1;
   overflow: auto;
   padding: 8px 0;
+  min-height: 0;
 }
 
 .module-row {
@@ -187,6 +190,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-height: 0;
 }
 
 #toolbar {
@@ -227,6 +231,7 @@ body {
 
 #details {
   overflow: auto;
+  min-height: 0;
 }
 
 .details-body {

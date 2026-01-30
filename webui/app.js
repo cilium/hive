@@ -14,6 +14,8 @@ const state = {
   objectIndex: [],
   objectRefIndex: new Map(),
   searchEntries: [],
+  history: [],
+  historyLocked: false,
 };
 
 const ROOT_KEY = "__root__";
@@ -30,8 +32,11 @@ const EDGE_TOOLTIP_MAX = 8;
 const viewport = document.getElementById("viewport");
 const tooltip = document.getElementById("tooltip");
 const detailsBody = document.getElementById("details-body");
+const detailsPanel = document.getElementById("details");
+const moduleList = document.getElementById("module-list");
 const objectQuery = document.getElementById("object-query");
 const objectResults = document.getElementById("object-results");
+const navBackButton = document.getElementById("nav-back");
 
 const DEFAULT_ZOOM = 1.2;
 
@@ -117,34 +122,12 @@ function buildModuleDeps() {
     state.moduleDeps.set(path, new Set());
   });
 
-  const moduleForNode = (id) => {
-    if (!id) {
-      return "";
-    }
-    if (id.startsWith("module:")) {
-      return id.slice("module:".length);
-    }
-    if (state.graph.constructors && state.graph.constructors[id]) {
-      return state.graph.constructors[id].modulePath || "";
-    }
-    if (state.graph.invokers && state.graph.invokers[id]) {
-      return state.graph.invokers[id].modulePath || "";
-    }
-    if (state.graph.decorators && state.graph.decorators[id]) {
-      return state.graph.decorators[id].modulePath || "";
-    }
-    if (state.graph.objects && state.graph.objects[id]) {
-      return state.graph.objects[id].modulePath || "";
-    }
-    return "";
-  };
-
   (state.graph.edges || []).forEach((edge) => {
     if (edge.kind !== "depends" && edge.kind !== "invokes") {
       return;
     }
-    const fromModule = moduleForNode(edge.from);
-    const toModule = moduleForNode(edge.to);
+    const fromModule = moduleForNodeId(edge.from);
+    const toModule = moduleForNodeId(edge.to);
     if (!fromModule || !toModule || fromModule === toModule) {
       return;
     }
@@ -166,6 +149,28 @@ function buildModuleDeps() {
       labels.add(formatObject(obj));
     }
   });
+}
+
+function moduleForNodeId(id) {
+  if (!id) {
+    return "";
+  }
+  if (id.startsWith("module:")) {
+    return id.slice("module:".length);
+  }
+  if (state.graph.constructors && state.graph.constructors[id]) {
+    return state.graph.constructors[id].modulePath || "";
+  }
+  if (state.graph.invokers && state.graph.invokers[id]) {
+    return state.graph.invokers[id].modulePath || "";
+  }
+  if (state.graph.decorators && state.graph.decorators[id]) {
+    return state.graph.decorators[id].modulePath || "";
+  }
+  if (state.graph.objects && state.graph.objects[id]) {
+    return state.graph.objects[id].modulePath || "";
+  }
+  return "";
 }
 
 function buildObjectIndex() {
@@ -317,8 +322,8 @@ function layoutTree() {
 }
 
 function applyLayout(layout) {
-  const xSpacing = 45;
-  const ySpacing = 16;
+  const xSpacing = 40;
+  const ySpacing = 14;
   const visible = new Set();
   const root = layout.positions.get(ROOT_KEY);
   const rootOffsetX = root ? root.x * xSpacing : 0;
@@ -410,6 +415,8 @@ function rebuildEdges() {
         from: fromNode.id,
         to: toNode.id,
         kind: "dep",
+        fromModule: modulePath,
+        toModule: dep,
         objects: edgeObjects.get(key) || [],
       };
       depEdgeGroup.add(tube);
@@ -539,7 +546,8 @@ function updateGraph() {
 }
 
 function buildModuleList() {
-  const list = document.getElementById("module-list");
+  const list = moduleList || document.getElementById("module-list");
+  const previousScroll = list ? list.scrollTop : 0;
   list.innerHTML = "";
 
   const buildTreeRow = (path, depth) => {
@@ -576,6 +584,7 @@ function buildModuleList() {
 
     row.addEventListener("click", (event) => {
       event.stopPropagation();
+      pushHistory();
       if (hasChildren) {
         toggleModule(path);
       } else {
@@ -596,6 +605,10 @@ function buildModuleList() {
 
   const roots = state.graph.rootModules || [];
   roots.forEach((path) => buildTreeRow(path, 0));
+
+  if (list) {
+    list.scrollTop = previousScroll;
+  }
 }
 
 function setupObjectSearch() {
@@ -666,6 +679,67 @@ function toggleModule(path) {
   updateGraph();
 }
 
+function captureViewState() {
+  return {
+    selectedId: state.selectedId,
+    expandedModules: Array.from(state.expandedModules),
+    camera: {
+      x: camera.position.x,
+      y: camera.position.y,
+      zoom: camera.zoom,
+    },
+  };
+}
+
+function restoreViewState(snapshot) {
+  if (!snapshot) {
+    return;
+  }
+  state.historyLocked = true;
+  state.expandedModules = new Set(snapshot.expandedModules || []);
+  updateGraph();
+  if (snapshot.selectedId) {
+    setSelected(snapshot.selectedId);
+  } else {
+    setSelected(null);
+  }
+  if (snapshot.camera) {
+    camera.position.set(snapshot.camera.x || 0, snapshot.camera.y || 0, 200);
+    camera.zoom = snapshot.camera.zoom || DEFAULT_ZOOM;
+    camera.updateProjectionMatrix();
+  }
+  state.historyLocked = false;
+}
+
+function pushHistory() {
+  if (state.historyLocked) {
+    return;
+  }
+  const snapshot = captureViewState();
+  const last = state.history[state.history.length - 1];
+  if (last && last.selectedId === snapshot.selectedId) {
+    return;
+  }
+  state.history.push(snapshot);
+  updateBackButton();
+}
+
+function popHistory() {
+  if (state.history.length === 0) {
+    return null;
+  }
+  const snapshot = state.history.pop();
+  updateBackButton();
+  return snapshot;
+}
+
+function updateBackButton() {
+  if (!navBackButton) {
+    return;
+  }
+  navBackButton.disabled = state.history.length === 0;
+}
+
 function expandModulePath(path) {
   if (!path || path === ROOT_KEY) {
     return;
@@ -685,6 +759,7 @@ function focusModulePath(path) {
   if (!path) {
     return;
   }
+  pushHistory();
   expandModulePath(path);
   updateGraph();
   focusModule(path);
@@ -751,13 +826,20 @@ function applyHighlight() {
 
 function renderDetails() {
   const selected = state.selectedId;
+  const previousScroll = detailsPanel ? detailsPanel.scrollTop : 0;
   if (!selected) {
     detailsBody.innerHTML = '<div class="muted">Select a module to inspect dependencies.</div>';
+    if (detailsPanel) {
+      detailsPanel.scrollTop = previousScroll;
+    }
     return;
   }
   const node = state.nodes.get(selected);
   if (!node) {
     detailsBody.innerHTML = '<div class="muted">Selection not found.</div>';
+    if (detailsPanel) {
+      detailsPanel.scrollTop = previousScroll;
+    }
     return;
   }
 
@@ -769,11 +851,15 @@ function renderDetails() {
         <div class="details-chip">All modules</div>
       </div>
     `;
+    if (detailsPanel) {
+      detailsPanel.scrollTop = previousScroll;
+    }
     return;
   }
   const moduleInfo = state.graph.modules[modulePath] || {};
   const provided = collectProvidedObjects(modulePath);
   const depends = collectDependencyObjects(modulePath);
+  const dependents = collectDependentModules(modulePath);
 
   detailsBody.innerHTML = `
     <div class="details-section">
@@ -796,7 +882,16 @@ function renderDetails() {
         ${renderObjectChips(provided)}
       </div>
     </div>
+    <div class="details-section">
+      <div class="label">Dependent Modules</div>
+      <div class="details-list">
+        ${renderModuleChips(dependents)}
+      </div>
+    </div>
   `;
+  if (detailsPanel) {
+    detailsPanel.scrollTop = previousScroll;
+  }
 }
 
 function collectProvidedObjects(modulePath) {
@@ -857,6 +952,32 @@ function collectDependencyObjects(modulePath) {
     addRefs(decor.inputs);
   });
   return Array.from(items.values()).sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function collectDependentModules(modulePath) {
+  const modules = collectModuleSubtree(modulePath);
+  const dependents = new Set();
+  Object.values(state.graph.objects || {}).forEach((obj) => {
+    if (!modules.has(obj.modulePath)) {
+      return;
+    }
+    if (!obj.providedBy || obj.providedBy.length === 0) {
+      return;
+    }
+    (obj.consumedBy || []).forEach((consumerId) => {
+      const consumerModule = moduleForNodeId(consumerId);
+      if (!consumerModule || consumerModule === ROOT_KEY) {
+        return;
+      }
+      if (modules.has(consumerModule)) {
+        return;
+      }
+      if (state.graph.modules && state.graph.modules[consumerModule]) {
+        dependents.add(consumerModule);
+      }
+    });
+  });
+  return Array.from(dependents).sort();
 }
 
 function collectModuleSubtree(modulePath) {
@@ -1019,6 +1140,20 @@ function renderObjectChips(items) {
     .join("");
 }
 
+function renderModuleChips(modules) {
+  if (!modules || modules.length === 0) {
+    return '<div class="muted">None</div>';
+  }
+  return modules
+    .map(
+      (modulePath) =>
+        `<button type="button" class="details-chip object-chip" data-module="${escapeHtml(
+          modulePath
+        )}">${escapeHtml(modulePath)}</button>`
+    )
+    .join("");
+}
+
 function escapeHtml(value) {
   return String(value || "")
     .replace(/&/g, "&amp;")
@@ -1128,9 +1263,9 @@ function pick(event, select) {
   const edgeIntersects = raycaster.intersectObjects(state.edgeMeshes, false);
   if (edgeIntersects.length > 0) {
     const edge = edgeIntersects[0].object;
-    const objects = (edge.userData && edge.userData.objects) || [];
-    if (objects.length > 0) {
-      showEdgeTooltip(objects, event.clientX, event.clientY);
+    const data = edge.userData || {};
+    if (data.kind === "dep" && data.objects && data.objects.length > 0) {
+      showEdgeTooltip(data, event.clientX, event.clientY);
       return;
     }
   }
@@ -1147,10 +1282,17 @@ function showTooltip(data, x, y) {
   tooltip.hidden = false;
 }
 
-function showEdgeTooltip(objects, x, y) {
+function showEdgeTooltip(data, x, y) {
+  const objects = data.objects || [];
   const lines = objects.slice(0, EDGE_TOOLTIP_MAX);
   const extra = objects.length - lines.length;
+  const header =
+    data.fromModule && data.toModule
+      ? `${data.fromModule} depends on ${data.toModule}`
+      : "Dependency";
   const text = [
+    header,
+    "",
     "Objects:",
     ...lines.map((label) => `- ${label}`),
     extra > 0 ? `+${extra} more` : "",
@@ -1247,6 +1389,11 @@ viewport.addEventListener("pointerup", (event) => {
   isDragging = false;
 });
 
+window.addEventListener("pointerup", () => {
+  isDragging = false;
+  lastPointer = null;
+});
+
 viewport.addEventListener("pointermove", (event) => {
   pick(event, false);
   if (!isDragging || !lastPointer) {
@@ -1284,6 +1431,7 @@ viewport.addEventListener("dblclick", (event) => {
   const nodeId = mesh.userData.id;
   const node = state.nodes.get(nodeId);
   if (node) {
+    pushHistory();
     toggleModule(node.modulePath);
     focusModule(node.modulePath);
   }
@@ -1294,6 +1442,15 @@ document.getElementById("reset-view").addEventListener("click", () => {
   camera.zoom = DEFAULT_ZOOM;
   camera.updateProjectionMatrix();
 });
+
+if (navBackButton) {
+  navBackButton.addEventListener("click", () => {
+    const snapshot = popHistory();
+    if (snapshot) {
+      restoreViewState(snapshot);
+    }
+  });
+}
 
 document.getElementById("expand-all").addEventListener("click", () => {
   state.moduleOrder.forEach((path) => state.expandedModules.add(path));
