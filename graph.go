@@ -15,6 +15,7 @@ import (
 )
 
 const GraphVersion = "v1"
+const GraphRootModule = "__root__"
 
 type Graph struct {
 	Version      string                   `json:"version"`
@@ -54,6 +55,7 @@ type GraphObject struct {
 	Name       string   `json:"name,omitempty"`
 	Group      string   `json:"group,omitempty"`
 	ModulePath string   `json:"modulePath,omitempty"`
+	Exported   bool     `json:"exported"`
 	ProvidedBy []string `json:"providedBy,omitempty"`
 	ConsumedBy []string `json:"consumedBy,omitempty"`
 }
@@ -263,6 +265,9 @@ func (b *graphBuilder) addDecoratorOutputs(decorators []cell.InspectDecorator, i
 
 func (b *graphBuilder) addConstructorInputs(constructors []cell.InspectConstructor, ids []string) {
 	for i, ctor := range constructors {
+		if isConfigConstructor(ctor) {
+			continue
+		}
 		node := b.graph.Constructors[ids[i]]
 		for _, input := range ctor.Inputs {
 			ref := b.toObjectRef(input)
@@ -325,6 +330,7 @@ func (b *graphBuilder) ensureProvidedObject(ref GraphObjectRef, modulePath strin
 
 func (b *graphBuilder) resolveOrCreateObject(ref GraphObjectRef, modulePath string) string {
 	signature := objectSignature(ref)
+	altSignature, altType := normalizeGroupSliceSignature(ref)
 	if ids, ok := b.objectsBySignature[signature]; ok && len(ids) > 0 {
 		if len(ids) == 1 {
 			return ids[0]
@@ -335,17 +341,35 @@ func (b *graphBuilder) resolveOrCreateObject(ref GraphObjectRef, modulePath stri
 		}
 		return ids[0]
 	}
-	objID := objectKey(signature, modulePath)
+	if altSignature != "" {
+		if ids, ok := b.objectsBySignature[altSignature]; ok && len(ids) > 0 {
+			if len(ids) == 1 {
+				return ids[0]
+			}
+			best := b.selectBestObject(ids, modulePath)
+			if best != "" {
+				return best
+			}
+			return ids[0]
+		}
+	}
+	objSignature := signature
+	objType := ref.Type
+	if altSignature != "" {
+		objSignature = altSignature
+		objType = altType
+	}
+	objID := objectKey(objSignature, GraphRootModule)
 	b.graph.Objects[objID] = &GraphObject{
 		ID:         objID,
-		Type:       ref.Type,
+		Type:       objType,
 		Name:       ref.Name,
 		Group:      ref.Group,
-		ModulePath: modulePath,
+		ModulePath: GraphRootModule,
 	}
 	b.objectByKey[objID] = objID
-	b.objectsBySignature[signature] = append(b.objectsBySignature[signature], objID)
-	b.addModuleObject(modulePath, objID)
+	b.objectsBySignature[objSignature] = append(b.objectsBySignature[objSignature], objID)
+	b.addModuleObject(GraphRootModule, objID)
 	return objID
 }
 
@@ -374,8 +398,21 @@ func (b *graphBuilder) toObjectRef(param cell.InspectParam) GraphObjectRef {
 	}
 }
 
+func isConfigConstructor(ctor cell.InspectConstructor) bool {
+	return strings.Contains(ctor.Name, "cell/config.go") ||
+		strings.Contains(ctor.Name, "cell.(*config[")
+}
+
 func objectSignature(ref GraphObjectRef) string {
 	return fmt.Sprintf("%s|%s|%s", ref.Type, ref.Name, ref.Group)
+}
+
+func normalizeGroupSliceSignature(ref GraphObjectRef) (string, string) {
+	if ref.Group == "" || !strings.HasPrefix(ref.Type, "[]") {
+		return "", ""
+	}
+	elemType := strings.TrimPrefix(ref.Type, "[]")
+	return fmt.Sprintf("%s|%s|%s", elemType, ref.Name, ref.Group), elemType
 }
 
 func objectKey(signature, modulePath string) string {
@@ -480,6 +517,7 @@ func (b *graphBuilder) normalize() {
 		slices.Sort(mod.Decorators)
 	}
 	for _, obj := range b.graph.Objects {
+		obj.Exported = b.objectExported(obj)
 		slices.Sort(obj.ProvidedBy)
 		slices.Sort(obj.ConsumedBy)
 	}
@@ -492,6 +530,25 @@ func (b *graphBuilder) normalize() {
 		}
 		return strings.Compare(a.To, b.To)
 	})
+}
+
+func (b *graphBuilder) objectExported(obj *GraphObject) bool {
+	hasCtor := false
+	for _, provider := range obj.ProvidedBy {
+		ctor, ok := b.graph.Constructors[provider]
+		if !ok {
+			continue
+		}
+		hasCtor = true
+		if ctor.Exported {
+			return true
+		}
+	}
+	if hasCtor {
+		return false
+	}
+	// If we can't attribute the object to a constructor, treat it as exported.
+	return true
 }
 
 func appendUnique(list []string, value string) []string {

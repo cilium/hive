@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hive Graph Explorer</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <aside id="sidebar">
+        <div class="brand">
+          <div class="logo">Hive</div>
+          <div class="subtitle">Dependency Graph</div>
+        </div>
+        <div id="module-list" class="panel"></div>
+        <div id="object-search" class="panel">
+          <div class="search-title">Object Search</div>
+          <input
+            id="object-query"
+            type="text"
+            placeholder="Search objects (e.g. FooManager)"
+            autocomplete="off"
+          />
+          <div id="object-results" class="object-results">
+            <div class="muted">Type to search for objects.</div>
+          </div>
+        </div>
+      </aside>
+      <main id="main">
+        <div id="toolbar" class="panel">
+          <div class="title">Graph View</div>
+          <div class="controls">
+            <button id="reset-view">Reset View</button>
+            <button id="collapse-all">Collapse All</button>
+            <button id="expand-all">Expand All</button>
+          </div>
+        </div>
+        <div id="viewport"></div>
+      </main>
+      <aside id="details" class="panel">
+        <div class="title">Details</div>
+        <div id="details-body" class="details-body">
+          <div class="muted">Select a node to inspect dependencies.</div>
+        </div>
+      </aside>
+    </div>
+    <div id="tooltip" class="tooltip" hidden></div>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

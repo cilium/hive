@@ -4,7 +4,11 @@
 package hive
 
 import (
+	"context"
+	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -34,6 +38,33 @@ func (h *Hive) Command() *cobra.Command {
 			},
 			TraverseChildren: false,
 		})
+
+	webUI := &cobra.Command{
+		Use:          "web-ui",
+		Short:        "Serve the dependency graph explorer UI",
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			addr, _ := cmd.Flags().GetString("listen")
+			handler, err := h.webUIHandler(slog.Default())
+			if err != nil {
+				return err
+			}
+			ln, err := net.Listen("tcp", addr)
+			if err != nil {
+				return err
+			}
+			srv := &http.Server{Handler: handler}
+			go func() {
+				<-cmd.Context().Done()
+				_ = srv.Shutdown(context.Background())
+			}()
+			fmt.Fprintf(os.Stdout, "Web UI listening on http://%s\n", ln.Addr().String())
+			return srv.Serve(ln)
+		},
+		TraverseChildren: false,
+	}
+	webUI.Flags().String("listen", "127.0.0.1:8080", "listen address for the web UI")
+	cmd.AddCommand(webUI)
 
 	return cmd
 }
