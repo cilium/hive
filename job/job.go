@@ -35,6 +35,9 @@ type Registry interface {
 	// The provided scope is used to report health status of the jobs. A `cell.Scope` can be obtained via injection
 	// an object with the correct scope is provided by the closest `cell.Module`.
 	NewGroup(health cell.Health, opts ...groupOpt) Group
+
+	// WithLifecycle creates a new registry for jobs with the given lifecycle.
+	WithLifecycle(lifecycle cell.Lifecycle) Registry
 }
 
 type registry struct {
@@ -86,6 +89,16 @@ func (c *registry) Stop(ctx cell.HookContext) error {
 	c.started = false
 	c.dynamicLC.Stop(c.logger, ctx)
 	return nil
+}
+
+func (c *registry) WithLifecycle(lifecycle cell.Lifecycle) Registry {
+	r := &registry{
+		logger:     c.logger,
+		shutdowner: c.shutdowner,
+		lifecycle:  lifecycle,
+	}
+	lifecycle.Append(r)
+	return r
 }
 
 // NewGroup creates a new Group with the given `opts` options, which allows you to customize the behavior for the
