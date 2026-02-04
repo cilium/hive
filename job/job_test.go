@@ -72,6 +72,88 @@ func TestRegistry(t *testing.T) {
 	}
 }
 
+func TestWithLifecycle(t *testing.T) {
+	log := hivetest.Logger(t)
+	lc := cell.NewDefaultLifecycle(nil, 0, 0)
+	var executed1, executed2 atomic.Bool
+	var stopped1, stopped2 atomic.Bool
+	jgs := map[string]Group{}
+
+	mod := func(name string, exec, stop *atomic.Bool) cell.Cell {
+		return cell.Module(name, name,
+			cell.Invoke(func(r Registry, h cell.Health) {
+				jg := r.NewGroup(h)
+				jgs[name] = jg
+				jg.Add(OneShot(name, func(ctx context.Context, health cell.Health) error {
+					exec.Store(true)
+					<-ctx.Done()
+					stop.Store(true)
+					return nil
+				}))
+			}),
+		)
+	}
+
+	// Construct a hive and add create two groups with job each. One group
+	// uses registry with the hive lifecycle and the other uses [lc] lifecycle.
+	h := hive.New(
+		cell.SimpleHealthCell,
+		Cell,
+		mod("test1", &executed1, &stopped1),
+		cell.Decorate(
+			func(r Registry) Registry {
+				return r.WithLifecycle(lc)
+			},
+			mod("test2", &executed2, &stopped2),
+		),
+	)
+
+	// Starting the Hive will start the Hive lifecycle but not [lc]
+	require.NoError(t, h.Start(log, context.TODO()))
+	require.Eventually(
+		t,
+		executed1.Load,
+		time.Second,
+		10*time.Millisecond,
+	)
+	require.False(t, executed2.Load())
+
+	// Starting the custom lifecycle starts the other job
+	require.NoError(t, lc.Start(log, context.TODO()))
+	require.Eventually(
+		t,
+		executed2.Load,
+		time.Second,
+		10*time.Millisecond,
+	)
+
+	// Job added after starting is started immediately
+	var dynamicJobStarted, dynamicJobStopped atomic.Bool
+	jgs["test2"].Add(OneShot("test2-dynamic", func(ctx context.Context, health cell.Health) error {
+		dynamicJobStarted.Store(true)
+		<-ctx.Done()
+		dynamicJobStopped.Store(true)
+		return nil
+	}))
+	require.Eventually(
+		t,
+		dynamicJobStarted.Load,
+		time.Second,
+		10*time.Millisecond,
+	)
+
+	// Stopping the custom lifecycle stops the second job
+	require.NoError(t, lc.Stop(log, context.TODO()))
+	require.False(t, stopped1.Load())
+	require.True(t, stopped2.Load())
+	require.True(t, dynamicJobStopped.Load())
+
+	// Stopping the Hive will stop the first job
+	require.NoError(t, h.Stop(log, context.TODO()))
+	require.True(t, stopped1.Load())
+	require.True(t, stopped2.Load())
+}
+
 // This test asserts that jobs are added to lifecycle before the hive has been started
 func TestGroup_JobPreStart(t *testing.T) {
 	t.Parallel()
