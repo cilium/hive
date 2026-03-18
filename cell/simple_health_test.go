@@ -53,3 +53,24 @@ hive stop
 	expected := `health 'test1.*matched: test1.*health 'test2.*matched: test2`
 	require.Regexp(t, expected, strings.ReplaceAll(stdout.String(), "\n", " "))
 }
+
+func TestSimpleHealthClose(t *testing.T) {
+	_, h := cell.NewSimpleHealth()
+	require.NotNil(t, h)
+
+	hTest := h.NewScope("test")
+	require.NotNil(t, hTest)
+
+	hTestInner := hTest.NewScope("inner")
+	require.NotNil(t, hTestInner)
+
+	require.NotNil(t, h.GetChild("test"))
+	require.NotNil(t, h.GetChild("test.inner"))
+
+	hTest.Close()
+	require.Nil(t, h.GetChild("test"))
+	require.NotNil(t, h.GetChild("test.inner"))
+
+	hTestInner.Close()
+	require.Nil(t, h.GetChild("test.inner"))
+}
