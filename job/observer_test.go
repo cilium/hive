@@ -5,6 +5,7 @@ package job
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 
@@ -124,4 +125,24 @@ func TestObserver_CtxClose(t *testing.T) {
 	if err := h.Stop(log, context.Background()); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// This test asserts that returning an error from an observer job with the
+// WithObserverShutdown option will shutdown the hive.
+func TestObserver_Shutdown(t *testing.T) {
+	t.Parallel()
+
+	targetErr := errors.New("observer error")
+	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
+		g := r.NewGroup(s)
+
+		g.Add(
+			Observer("shutdown", func(ctx context.Context, event string) error {
+				return targetErr
+			}, stream.FromSlice([]string{"a"}), WithObserverShutdown[string]()),
+		)
+	})
+
+	err := h.Run(hivetest.Logger(t))
+	assert.ErrorIs(t, err, targetErr)
 }

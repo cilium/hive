@@ -42,6 +42,14 @@ type ObserverFunc[T any] func(ctx context.Context, event T) error
 
 type observerOpt[T any] func(*jobObserver[T])
 
+// WithObserverShutdown option configures an observer job to shutdown the whole
+// hive if the observer function returns a non-nil, non-context.Canceled error.
+func WithObserverShutdown[T any]() observerOpt[T] {
+	return func(jo *jobObserver[T]) {
+		jo.shutdownOnError = true
+	}
+}
+
 type jobObserver[T any] struct {
 	name string
 	fn   ObserverFunc[T]
@@ -52,7 +60,8 @@ type jobObserver[T any] struct {
 	observable stream.Observable[T]
 
 	// If not nil, call the shutdowner on error
-	shutdown hive.Shutdowner
+	shutdown        hive.Shutdowner
+	shutdownOnError bool
 }
 
 func (jo *jobObserver[T]) info() string {
@@ -62,6 +71,10 @@ func (jo *jobObserver[T]) info() string {
 func (jo *jobObserver[T]) start(ctx context.Context, health cell.Health, options options) {
 	for _, opt := range jo.opts {
 		opt(jo)
+	}
+
+	if jo.shutdownOnError && options.shutdowner != nil {
+		jo.shutdown = options.shutdowner
 	}
 
 	jo.health = health.NewScope("observer-job-" + jo.name)
