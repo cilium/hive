@@ -428,15 +428,15 @@ func TestTimeoutOverride(t *testing.T) {
 	var started, stopped int
 	opts := hive.DefaultOptions()
 
-	newStartTimeout := 3*time.Millisecond
-	newStopTimeout := 2*time.Millisecond
+	newStartTimeout := 3 * time.Millisecond
+	newStopTimeout := 2 * time.Millisecond
 
 	h := hive.NewWithOptions(
 		opts,
 		cell.Invoke(func(lc cell.Lifecycle, shutdowner hive.Shutdowner) {
 			lc.Append(cell.Hook{
 				OnStart: func(ctx cell.HookContext) error {
-					started ++
+					started++
 
 					deadline, ok := ctx.Deadline()
 					assert.True(t, ok, "expected start context to have a deadline")
@@ -448,7 +448,7 @@ func TestTimeoutOverride(t *testing.T) {
 					return nil
 				},
 				OnStop: func(ctx cell.HookContext) error {
-					stopped ++
+					stopped++
 
 					deadline, ok := ctx.Deadline()
 					assert.True(t, ok, "expexted stop context to have a deadline")
