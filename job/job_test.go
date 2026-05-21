@@ -5,10 +5,10 @@ package job
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"runtime"
 	"runtime/pprof"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -221,12 +221,10 @@ func TestJobLifecycleOrderingAcrossGroups(t *testing.T) {
 		g2 Group
 	)
 
-	staticStarts := []string{"g1-first", "g1-second", "g2-first", "g1-third"}
-	expectStarts := append(append([]string{}, staticStarts...), "g2-dynamic", "g1-dynamic")
-	expectStops := []string{"g1-third", "g2-first", "g1-second", "g1-first", "g1-dynamic", "g2-dynamic"}
+	started, stopped := &orderCollector{}, &orderCollector{}
 
 	addJob := func(g Group, name string) {
-		g.Add(&orderingJob{name: name})
+		g.Add(&orderingJob{started: started, stopped: stopped, name: name})
 	}
 
 	h := fixture(func(r Registry, s cell.Health, l cell.Lifecycle) {
@@ -239,28 +237,48 @@ func TestJobLifecycleOrderingAcrossGroups(t *testing.T) {
 		addJob(g1, "g1-third")
 	})
 
-	log, logs := newRecordingLogger()
+	log := hivetest.Logger(t)
 	ctx := context.Background()
 	require.NoError(t, h.Start(log, ctx))
 
-	waitForDetails(t, logs, len(staticStarts))
-	startDetails := logs.attrs("detail")
-	assert.Equal(t, staticStarts, startDetails)
+	assert.Eventually(t,
+		func() bool {
+			return len(started.get()) == 4
+		},
+		time.Second, 10*time.Millisecond, "expected 4 static jobs to have started")
 
 	// Add jobs dynamically after the lifecycle has already started.
 	addJob(g2, "g2-dynamic")
 	addJob(g1, "g1-dynamic")
 
-	waitForDetails(t, logs, len(expectStarts))
-	startDetails = logs.attrs("detail")
-	assert.Equal(t, expectStarts, startDetails)
-	logs.clear()
+	assert.Eventually(t,
+		func() bool {
+			return len(started.get()) == 6
+		},
+		time.Second, 10*time.Millisecond, "expected 4 static jobs + 2 dynamic jobs")
+
+	// While the order of [started.get] is non-deterministic the order in which
+	// we stop is.
+	expectedStops := []string{
+		"g1-dynamic",
+		"g2-dynamic",
+		"g1-third",
+		"g2-first",
+		"g1-second",
+		"g1-first",
+	}
+
+	// The order in which these goroutines started is non-deterministic, so just
+	// check that all of them are running as expected
+	startedJobs := started.get()
+	slices.Sort(startedJobs)
+	expectedStarts := slices.Clone(expectedStops)
+	slices.Sort(expectedStarts)
+	assert.Equal(t, startedJobs, expectedStarts)
 
 	require.NoError(t, h.Stop(log, ctx))
 
-	waitForDetails(t, logs, len(expectStops))
-	stopDetails := logs.attrs("detail")
-	assert.Equal(t, expectStops, stopDetails)
+	assert.Equal(t, expectedStops, stopped.get())
 }
 
 func TestModuleDecoratedGroup(t *testing.T) {
@@ -361,108 +379,33 @@ func Test_sanitizeName(t *testing.T) {
 	}
 }
 
+type orderCollector struct {
+	mu      sync.Mutex
+	records []string
+}
+
+func (oc *orderCollector) add(name string) {
+	oc.mu.Lock()
+	oc.records = append(oc.records, name)
+	oc.mu.Unlock()
+}
+func (oc *orderCollector) get() []string {
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
+	return slices.Clone(oc.records)
+}
+
 type orderingJob struct {
-	name string
+	started, stopped *orderCollector
+	name             string
 }
 
 func (oj *orderingJob) start(ctx context.Context, _ cell.Health, _ options) {
+	oj.started.add(oj.name)
+	defer oj.stopped.add(oj.name)
 	<-ctx.Done()
 }
 
 func (oj *orderingJob) info() string {
 	return oj.name
-}
-
-type logRecord struct {
-	msg   string
-	attrs map[string]string
-}
-
-type logCollector struct {
-	mu      sync.Mutex
-	records []logRecord
-}
-
-func (lc *logCollector) add(rec logRecord) {
-	lc.mu.Lock()
-	defer lc.mu.Unlock()
-	lc.records = append(lc.records, rec)
-}
-
-func (lc *logCollector) clear() {
-	lc.mu.Lock()
-	defer lc.mu.Unlock()
-	lc.records = nil
-}
-
-func (lc *logCollector) attrs(attr string) []string {
-	lc.mu.Lock()
-	defer lc.mu.Unlock()
-
-	var out []string
-	for _, rec := range lc.records {
-		value, ok := rec.attrs[attr]
-		if !ok {
-			continue
-		}
-		out = append(out, value)
-	}
-	return out
-}
-
-type recordingHandler struct {
-	collector *logCollector
-	attrs     []slog.Attr
-}
-
-func newRecordingLogger() (*slog.Logger, *logCollector) {
-	collector := &logCollector{}
-	return slog.New(&recordingHandler{collector: collector}), collector
-}
-
-func (rh *recordingHandler) Enabled(_ context.Context, lvl slog.Level) bool {
-	return lvl >= slog.LevelInfo
-}
-
-func (rh *recordingHandler) Handle(_ context.Context, r slog.Record) error {
-	rec := logRecord{
-		msg:   r.Message,
-		attrs: make(map[string]string),
-	}
-	for _, attr := range rh.attrs {
-		rec.attrs[attr.Key] = fmt.Sprint(attr.Value)
-	}
-	r.Attrs(func(a slog.Attr) bool {
-		rec.attrs[a.Key] = fmt.Sprint(a.Value)
-		return true
-	})
-	rh.collector.add(rec)
-	return nil
-}
-
-func (rh *recordingHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	nrh := &recordingHandler{
-		collector: rh.collector,
-		attrs:     append(append([]slog.Attr{}, rh.attrs...), attrs...),
-	}
-	return nrh
-}
-
-func (rh *recordingHandler) WithGroup(string) slog.Handler {
-	return &recordingHandler{
-		collector: rh.collector,
-		attrs:     append([]slog.Attr{}, rh.attrs...),
-	}
-}
-
-func waitForDetails(t *testing.T, logs *logCollector, expectedLen int) {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if len(logs.attrs("detail")) >= expectedLen {
-			return
-		}
-		time.Sleep(tick)
-	}
-	t.Fatalf("timeout waiting for logs (expected %d); have %v", expectedLen, logs.attrs("detail"))
 }

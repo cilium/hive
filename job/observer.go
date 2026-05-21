@@ -106,8 +106,12 @@ func (jo *jobObserver[T]) start(ctx context.Context, health cell.Health, options
 				return
 			}
 
-			jo.health.Degraded("observer job errored", err)
-			l.Error("Observer job errored", "error", err)
+			msg := fmt.Sprintf("Observer job failed (duration %s)", duration)
+			jo.health.Degraded(msg, err)
+			l.Error("Observer job errored",
+				"error", err,
+				"duration", duration,
+			)
 
 			if options.metrics != nil {
 				options.metrics.JobError(jo.name, err)

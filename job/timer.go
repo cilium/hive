@@ -201,8 +201,11 @@ func (jt *jobTimer) start(ctx context.Context, health cell.Health, options optio
 			jt.health.OK("OK (" + duration.String() + ")")
 			l.Debug("Timer job finished")
 		} else if !errors.Is(err, context.Canceled) {
-			jt.health.Degraded("timer job errored", err)
-			l.Error("Timer job errored", "error", err)
+			msg := fmt.Sprintf("Timer job failed (duration %s)", duration)
+			jt.health.Degraded(msg, err)
+			l.Error("Timer job failed",
+				"error", err,
+				"duration", duration)
 
 			if options.metrics != nil {
 				options.metrics.JobError(jt.name, err)
