@@ -78,6 +78,7 @@ func (jo *jobObserver[T]) start(ctx context.Context, health cell.Health, options
 	}
 
 	jo.health = health.NewScope("observer-job-" + jo.name)
+	defer jo.health.Close()
 	reportTicker := time.NewTicker(10 * time.Second)
 	defer reportTicker.Stop()
 
@@ -85,7 +86,6 @@ func (jo *jobObserver[T]) start(ctx context.Context, health cell.Health, options
 		"name", jo.name,
 		"func", internal.FuncNameAndLocation(jo.fn))
 
-	l.Debug("Observer job started")
 	jo.health.OK("Primed")
 	var msgCount uint64
 
@@ -135,10 +135,7 @@ func (jo *jobObserver[T]) start(ctx context.Context, health cell.Health, options
 
 	<-done
 
-	jo.health.Stopped("observer job done")
 	if err != nil && !errors.Is(err, context.Canceled) {
 		l.Error("Observer job stopped with an error", "error", err)
-	} else {
-		l.Debug("Observer job stopped")
 	}
 }
