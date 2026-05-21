@@ -112,7 +112,7 @@ func (jos *jobOneShot) start(ctx context.Context, health cell.Health, options op
 	}
 
 	jos.health = health.NewScope("job-" + jos.name)
-	defer jos.health.Stopped("one-shot job done")
+	defer jos.health.Close()
 
 	l := options.logger.With(
 		"name", jos.name,
@@ -132,8 +132,6 @@ func (jos *jobOneShot) start(ctx context.Context, health cell.Health, options op
 			case <-time.After(timeout):
 			}
 		}
-
-		l.Debug("Starting one-shot job")
 
 		jos.health.OK("Running")
 		start := time.Now()

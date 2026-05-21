@@ -155,6 +155,7 @@ func (jt *jobTimer) start(ctx context.Context, health cell.Health, options optio
 	}
 
 	jt.health = health.NewScope("timer-job-" + jt.name)
+	defer jt.health.Close()
 
 	l := options.logger.With(
 		"name", jt.name,
@@ -172,13 +173,11 @@ func (jt *jobTimer) start(ctx context.Context, health cell.Health, options optio
 		triggerChan = jt.trigger.c
 	}
 
-	l.Debug("Starting timer job")
 	jt.health.OK("Primed")
 
 	for {
 		select {
 		case <-ctx.Done():
-			jt.health.Stopped("timer job context done")
 			return
 		case <-tickerChan:
 		case <-triggerChan:
