@@ -93,10 +93,11 @@ func TestInteractiveShell(t *testing.T) {
 
 	// Interactive use
 	cmd := exec.Command(os.Args[0], "-client", sock)
-	cmd.Stdin = strings.NewReader("help help\r\nexit\r\n")
+	cmd.Stdin = strings.NewReader("unknown\r\nhelp help\r\nexit\r\n")
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "CombinedOutput")
 
+	require.Contains(t, string(out), "unknown: unknown command")
 	require.Contains(t, string(out), "test> help help")
 	require.Contains(t, string(out), "log help text")
 
