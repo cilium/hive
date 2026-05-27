@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/cilium/hive/cell"
+	"github.com/cilium/hive/hivetest"
 )
 
 func TestJobLifecycleInsertAndRemove(t *testing.T) {
@@ -30,15 +31,15 @@ func TestJobLifecycleInsertAndRemove(t *testing.T) {
 
 	requireRuntimeLifecycleList(t, r, third, second, first)
 
-	removeRuntimeLifecycleJob(r, second)
+	r.runtimeLifecycle.remove(second)
 	requireRuntimeLifecycleList(t, r, third, first)
 	requireRuntimeLifecycleJobUnlinked(t, r, second)
 
-	removeRuntimeLifecycleJob(r, third)
+	r.runtimeLifecycle.remove(third)
 	requireRuntimeLifecycleList(t, r, first)
 	requireRuntimeLifecycleJobUnlinked(t, r, third)
 
-	removeRuntimeLifecycleJob(r, first)
+	r.runtimeLifecycle.remove(first)
 	requireRuntimeLifecycleList(t, r)
 	requireRuntimeLifecycleJobUnlinked(t, r, first)
 }
@@ -86,7 +87,7 @@ func TestJobLifecycleStopStopsJobsInReverseStartOrder(t *testing.T) {
 	insertRuntimeLifecycleJobs(r, first, second, third)
 	waitForLifecycleJobs(t, first, second, third)
 
-	require.NoError(t, stopRuntimeLifecycle(r, context.Background()))
+	require.NoError(t, r.runtimeLifecycle.stop(context.Background(), hivetest.Logger(t)))
 
 	requireRuntimeLifecycleList(t, r)
 
@@ -102,7 +103,7 @@ func TestJobLifecycleStopReturnsContextError(t *testing.T) {
 	cancel()
 
 	var lifecycle jobLifecycle
-	assert.ErrorIs(t, lifecycle.stop(ctx), context.Canceled)
+	assert.ErrorIs(t, lifecycle.stop(ctx, hivetest.Logger(t)), context.Canceled)
 }
 
 type blockingLifecycleJob struct {
@@ -178,14 +179,6 @@ func insertRuntimeLifecycleJobs(r *registry, jobs ...*queuedJob) {
 	for _, qj := range jobs {
 		r.runtimeLifecycle.insertAndStart(qj)
 	}
-}
-
-func removeRuntimeLifecycleJob(r *registry, qj *queuedJob) {
-	r.runtimeLifecycle.remove(qj)
-}
-
-func stopRuntimeLifecycle(r *registry, ctx context.Context) error {
-	return r.runtimeLifecycle.stop(ctx)
 }
 
 func requireRuntimeLifecycleList(t *testing.T, r *registry, want ...*queuedJob) {

@@ -95,7 +95,7 @@ func (c *registry) Stop(ctx cell.HookContext) error {
 		return nil
 	}
 	c.started = false
-	return c.runtimeLifecycle.stop(ctx)
+	return c.runtimeLifecycle.stop(ctx, c.logger)
 }
 
 // PreStopHookMarker tells [cell.DefaultLifecycle] that this

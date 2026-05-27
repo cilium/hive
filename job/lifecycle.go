@@ -5,6 +5,7 @@ package job
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 
 	"github.com/cilium/hive/cell"
@@ -56,7 +57,7 @@ func (r *jobLifecycle) remove(qj *queuedJob) {
 	qj.next = nil
 }
 
-func (r *jobLifecycle) stop(ctx cell.HookContext) error {
+func (r *jobLifecycle) stop(ctx cell.HookContext, log *slog.Logger) error {
 	// Collect jobs to stop and unlink them. We must stop them without holding the
 	// lock as [queuedJob.Stop] will try to call [jobLifecycle.remove].
 	var jobsToStop []*queuedJob
@@ -73,6 +74,9 @@ func (r *jobLifecycle) stop(ctx cell.HookContext) error {
 	for _, job := range jobsToStop {
 		job.Stop(ctx)
 		if ctx.Err() != nil {
+			log.Error("Stop cancelled while waiting for job to stop",
+				"job",
+				job.job.info())
 			break
 		}
 	}
