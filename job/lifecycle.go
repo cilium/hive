@@ -21,11 +21,19 @@ type jobLifecycle struct {
 	// jobs is a doubly linked-list of started jobs. The head is the latest
 	// started jobs, e.g. they're in the order they should be stopped.
 	jobs *queuedJob
+
+	// stopped is true if the lifecycle has been stopped and no new jobs
+	// can be added.
+	stopped bool
 }
 
 func (r *jobLifecycle) insertAndStart(job *queuedJob) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if r.stopped {
+		return
+	}
 
 	if r.jobs != nil {
 		r.jobs.prev = job
@@ -70,6 +78,7 @@ func (r *jobLifecycle) stop(ctx cell.HookContext, log *slog.Logger) error {
 		jobsToStop = append(jobsToStop, job)
 	}
 	r.jobs = nil
+	r.stopped = true
 	r.mu.Unlock()
 	for _, job := range jobsToStop {
 		job.Stop(ctx)

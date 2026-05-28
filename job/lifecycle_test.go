@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -104,6 +105,33 @@ func TestJobLifecycleStopReturnsContextError(t *testing.T) {
 
 	var lifecycle jobLifecycle
 	assert.ErrorIs(t, lifecycle.stop(ctx, hivetest.Logger(t)), context.Canceled)
+}
+
+func TestJobLifecycleJobNotStartedAfterStop(t *testing.T) {
+	t.Parallel()
+
+	// Create a stopped registry
+	r := &registry{logger: lifecycleTestLogger()}
+	require.NoError(t, r.Start(context.Background()))
+	require.NoError(t, r.Stop(context.Background()))
+
+	// Adding jobs now won't start them
+	qj := &queuedJob{
+		registry: r,
+		job:      &completingLifecycleJob{started: make(chan struct{})},
+	}
+	r.runtimeLifecycle.insertAndStart(qj)
+
+	// The job list should be empty
+	require.Nil(t, r.runtimeLifecycle.jobs)
+
+	// Wait 50ms and verify it did not start.
+	select {
+	case <-qj.job.(*completingLifecycleJob).started:
+		t.Fatalf("job should not start after registry was stopped")
+	case <-time.After(50 * time.Millisecond):
+	}
+
 }
 
 type blockingLifecycleJob struct {
