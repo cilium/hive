@@ -94,7 +94,6 @@ func (c *registry) Stop(ctx cell.HookContext) error {
 	if !c.started {
 		return nil
 	}
-	c.started = false
 	return c.runtimeLifecycle.stop(ctx, c.logger)
 }
 
