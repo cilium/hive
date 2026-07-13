@@ -1,0 +1,32 @@
+# Tests for the -w flag of cmp and cmpenv
+
+# tab-aligned output vs a hand-spaced golden
+exec printf 'Direction  Identity  Action\nIngress    12345     Allow\nEgress     6         Allow\n'
+! cmp stdout aligned.txt
+cmp -w stdout aligned.txt
+
+# a genuine difference is still caught
+! cmp -w stdout different.txt
+
+# cmpenv -w expands variables, then ignores whitespace
+env WANT_ID=12345
+cmpenv -w stdout aligned_env.txt
+
+# leading and trailing whitespace is trimmed
+exec printf '   hello   world   \n'
+cmp -w stdout trimmed.txt
+
+-- aligned.txt --
+Direction Identity Action
+Ingress 12345 Allow
+Egress 6 Allow
+-- different.txt --
+Direction Identity Action
+Ingress 12345 Deny
+Egress 6 Allow
+-- aligned_env.txt --
+Direction   Identity   Action
+Ingress     ${WANT_ID}  Allow
+Egress      6           Allow
+-- trimmed.txt --
+hello world
