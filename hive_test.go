@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/netip"
 	"sync"
 	"testing"
 	"time"
@@ -193,6 +195,88 @@ func TestHiveStringSlice(t *testing.T) {
 	assert.ElementsMatch(t, cfg.CommasMap, expected, "unexpected CommasMap")
 	assert.ElementsMatch(t, cfg.Mixed, []string{"foo bar", "baz"}, "unexpected Mixed")
 	assert.Equal(t, cfg.StringFlag, "foo, bar, baz", "unexpected StringFlag")
+}
+
+// Level is a config field type that only implements encoding.TextUnmarshaler,
+// e.g. a type from an external package that hive knows nothing about.
+type Level int
+
+func (l *Level) UnmarshalText(text []byte) error {
+	switch string(text) {
+	case "info":
+		*l = 1
+	case "debug":
+		*l = 2
+	default:
+		return fmt.Errorf("unknown level %q", text)
+	}
+	return nil
+}
+
+type TextUnmarshalerConfig struct {
+	Addr     netip.Addr
+	Prefix   netip.Prefix
+	Time     time.Time
+	IP       net.IP
+	Level    Level
+	Prefixes []netip.Prefix
+}
+
+func (TextUnmarshalerConfig) Flags(flags *pflag.FlagSet) {
+	flags.String("addr", "", "netip.Addr")
+	flags.String("prefix", "", "netip.Prefix")
+	flags.String("time", "", "time.Time")
+
+	// net.IP is a []byte underneath, so it is only decoded correctly if the
+	// text unmarshaler hook runs before the string->[]string splitting.
+	flags.String("ip", "", "net.IP")
+
+	flags.String("level", "info", "a type implementing encoding.TextUnmarshaler")
+	flags.StringSlice("prefixes", nil, "[]netip.Prefix")
+}
+
+func TestHiveTextUnmarshaler(t *testing.T) {
+	var cfg TextUnmarshalerConfig
+	testCell := cell.Module(
+		"test",
+		"Test Module",
+		cell.Config(TextUnmarshalerConfig{}),
+		cell.Invoke(func(c TextUnmarshalerConfig) {
+			cfg = c
+		}),
+	)
+	hive := hive.New(testCell)
+
+	flags := pflag.NewFlagSet("", pflag.ContinueOnError)
+	hive.RegisterFlags(flags)
+
+	flags.Set("addr", "10.0.0.1")
+	flags.Set("prefix", "10.0.0.0/8")
+	flags.Set("time", "2006-01-02T15:04:05Z")
+	flags.Set("ip", "10.0.0.2")
+	flags.Set("level", "debug")
+
+	// Slices of text unmarshalers are decoded element-wise, both when given
+	// via the flags as a []string and via the configmap as a plain string.
+	hive.Viper().MergeConfigMap(
+		map[string]any{
+			"prefixes": "10.0.0.0/8,192.168.0.0/16",
+		})
+
+	log := hivetest.Logger(t)
+	err := hive.Start(log, context.TODO())
+	require.NoError(t, err, "expected Start to succeed")
+	err = hive.Stop(log, context.TODO())
+	require.NoError(t, err, "expected Stop to succeed")
+
+	assert.Equal(t, netip.MustParseAddr("10.0.0.1"), cfg.Addr, "unexpected Addr")
+	assert.Equal(t, netip.MustParsePrefix("10.0.0.0/8"), cfg.Prefix, "unexpected Prefix")
+	assert.Equal(t, time.Date(2006, 1, 2, 15, 4, 5, 0, time.UTC), cfg.Time, "unexpected Time")
+	assert.Equal(t, net.ParseIP("10.0.0.2"), cfg.IP, "unexpected IP")
+	assert.Equal(t, Level(2), cfg.Level, "unexpected Level")
+	assert.Equal(t,
+		[]netip.Prefix{netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("192.168.0.0/16")},
+		cfg.Prefixes, "unexpected Prefixes")
 }
 
 type SomeObject struct {
