@@ -213,6 +213,44 @@ func TestGroup_JobRuntime(t *testing.T) {
 	h.Stop(slog.Default(), context.Background())
 }
 
+func TestGroup_AddDuringStop(t *testing.T) {
+	t.Parallel()
+
+	var g Group
+	h := fixture(func(r Registry, health cell.Health, _ cell.Lifecycle) {
+		g = r.NewGroup(health)
+	})
+
+	log := hivetest.Logger(t)
+	require.NoError(t, h.Start(log, context.Background()))
+
+	parentStarted := make(chan struct{})
+	var childStarted atomic.Bool
+	g.Add(OneShot("parent", func(ctx context.Context, _ cell.Health) error {
+		close(parentStarted)
+		<-ctx.Done()
+
+		// Adding a job after cancellation must not deadlock with registry
+		// shutdown. Since shutdown has started, the child is discarded.
+		g.Add(OneShot("child", func(context.Context, cell.Health) error {
+			childStarted.Store(true)
+			return nil
+		}))
+		return nil
+	}))
+
+	select {
+	case <-parentStarted:
+	case <-time.After(timeout):
+		t.Fatal("parent job did not start")
+	}
+
+	stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.NoError(t, h.Stop(log, stopCtx))
+	require.False(t, childStarted.Load())
+}
+
 func TestJobLifecycleOrderingAcrossGroups(t *testing.T) {
 	t.Parallel()
 
