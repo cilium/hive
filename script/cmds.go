@@ -5,6 +5,7 @@
 package script
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -22,6 +23,7 @@ import (
 	"time"
 
 	"github.com/cilium/hive/script/internal/diff"
+	yaml "github.com/goccy/go-yaml"
 	"github.com/spf13/pflag"
 	"golang.org/x/term"
 )
@@ -57,6 +59,7 @@ func DefaultCmds() map[string]Cmd {
 		"symlink": Symlink(),
 		"wait":    Wait(),
 		"break":   Break(),
+		"yq":      Yaml(),
 	}
 }
 
@@ -159,6 +162,49 @@ func Cat() Cmd {
 			wait := func(*State) (stdout, stderr string, err error) {
 				err = <-errc
 				return buf.String(), "", err
+			}
+			return wait, nil
+		})
+}
+
+func Yaml() Cmd {
+	return Command(
+		CmdUsage{
+			Summary: "concatenate files and print to the script's stdout buffer",
+			Args:    "files...",
+		},
+		func(s *State, args ...string) (WaitFunc, error) {
+			if len(args) == 0 {
+				return nil, ErrUsage
+			}
+
+			path := s.Path(args[0])
+			b, err := os.ReadFile(path)
+			var buf strings.Builder
+			buf.Write(b)
+			errc := make(chan error)
+			if err != nil {
+				errc <- err
+			} else {
+				close(errc)
+			}
+
+			wait := func(*State) (stdout, stderr string, err error) {
+				err = <-errc
+				if err != nil {
+					return "", "", err
+				}
+				path, err := yaml.PathString(args[1])
+				if err != nil {
+					return "", "", err
+				}
+				var out any
+				if err := path.Read(strings.NewReader(buf.String()), &out); err != nil {
+					return "", "", err
+				}
+				outBuf := &bytes.Buffer{}
+				yaml.NewEncoder(outBuf).Encode(out)
+				return outBuf.String(), "", err
 			}
 			return wait, nil
 		})
