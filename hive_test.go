@@ -719,3 +719,75 @@ func Test_Regression_Parallel_Config(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// countingLifecycle wraps DefaultLifecycle to record the calls made through
+// it, so tests can verify that the hive uses the lifecycle it was given.
+type countingLifecycle struct {
+	*cell.DefaultLifecycle
+	appends, starts, stops int
+}
+
+func (lc *countingLifecycle) Append(hook cell.HookInterface) {
+	lc.appends++
+	lc.DefaultLifecycle.Append(hook)
+}
+
+func (lc *countingLifecycle) Start(log *slog.Logger, ctx context.Context) error {
+	lc.starts++
+	return lc.DefaultLifecycle.Start(log, ctx)
+}
+
+func (lc *countingLifecycle) Stop(log *slog.Logger, ctx context.Context) error {
+	lc.stops++
+	return lc.DefaultLifecycle.Stop(log, ctx)
+}
+
+func TestCustomLifecycle(t *testing.T) {
+	var started, stopped int
+	lc := &countingLifecycle{DefaultLifecycle: &cell.DefaultLifecycle{}}
+
+	opts := hive.DefaultOptions()
+	opts.Lifecycle = lc
+
+	h := hive.NewWithOptions(
+		opts,
+		cell.Invoke(func(injected cell.Lifecycle) {
+			assert.Same(t, lc, injected, "expected the custom lifecycle to be provided to cells")
+			injected.Append(cell.Hook{
+				OnStart: func(cell.HookContext) error {
+					started++
+					return nil
+				},
+				OnStop: func(cell.HookContext) error {
+					stopped++
+					return nil
+				},
+			})
+		}),
+	)
+
+	log := hivetest.Logger(t)
+	require.NoError(t, h.Start(log, context.TODO()), "expected Start() to succeed")
+	require.NoError(t, h.Stop(log, context.TODO()), "expected Stop() to succeed")
+
+	assert.Equal(t, 1, lc.appends, "expected Append() to go through the custom lifecycle")
+	assert.Equal(t, 1, lc.starts, "expected Start() to go through the custom lifecycle")
+	assert.Equal(t, 1, lc.stops, "expected Stop() to go through the custom lifecycle")
+	assert.Equal(t, 1, started)
+	assert.Equal(t, 1, stopped)
+}
+
+func TestDefaultLifecycle(t *testing.T) {
+	opts := hive.DefaultOptions()
+	opts.LogThreshold = time.Millisecond
+
+	h := hive.NewWithOptions(
+		opts,
+		cell.Invoke(func(injected cell.Lifecycle) {
+			lc, ok := injected.(*cell.DefaultLifecycle)
+			require.True(t, ok, "expected a DefaultLifecycle when Options.Lifecycle is nil, got %T", injected)
+			assert.Equal(t, opts.LogThreshold, lc.LogThreshold, "expected LogThreshold to be propagated to the default lifecycle")
+		}),
+	)
+	require.NoError(t, h.Populate(hivetest.Logger(t)), "expected Populate() to succeed")
+}
