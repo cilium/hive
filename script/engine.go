@@ -365,7 +365,7 @@ func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Wri
 					select {
 					case <-s.Context().Done():
 						s.RetryCount = 0
-						return lineErr(s.Context().Err())
+						return lineErr(err)
 					case <-time.After(retryDuration):
 					}
 					s.RetryCount++
