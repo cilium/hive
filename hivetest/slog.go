@@ -1,109 +1,85 @@
 package hivetest
 
 import (
-	"bytes"
-	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
-	"slices"
-	"sync/atomic"
+	"sync"
 	"testing"
 )
 
 // Logger returns a logger which forwards structured logs to t.
+//
+// Logs emitted after t has completed are written to stderr instead, prefixed
+// with the name of the test. These usually indicate a goroutine outliving its
+// test. Note that this includes logs from cleanup functions registered before
+// Logger was called, since cleanups run in last-in-first-out order.
 func Logger(t testing.TB, opts ...LogOption) *slog.Logger {
-	// We need to make sure that we don't try to log to `t` after the test has
-	// completed since that leads to a panic.
-	var tDone atomic.Bool
-	t.Cleanup(func() {
-		tDone.Store(true)
-	})
-
-	th := &testHandler{
-		tDone: &tDone,
-		t:     t,
-	}
-	for _, o := range opts {
-		o(th)
-	}
-	return slog.New(th)
+	return newLogger(t, os.Stderr, opts...)
 }
 
-type LogOption func(*testHandler)
+func newLogger(t testing.TB, late io.Writer, opts ...LogOption) *slog.Logger {
+	o := logOptions{level: slog.LevelInfo}
+	for _, opt := range opts {
+		opt(&o)
+	}
+
+	w := &testWriter{name: t.Name(), w: t.Output(), late: late}
+	// Cleanups run before the testing package marks t as done. Once this
+	// cleanup has run, no write to t is in flight and none will follow.
+	t.Cleanup(w.finish)
+
+	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{
+		AddSource: true,
+		Level:     o.level,
+	}))
+}
+
+type logOptions struct {
+	level slog.Leveler
+}
+
+type LogOption func(*logOptions)
 
 func LogLevel(l slog.Level) LogOption {
-	return func(th *testHandler) {
-		th.level = l
+	return func(o *logOptions) {
+		o.level = l
 	}
 }
 
-// Will be accessed by multiple goroutines - needs to appear immutable.
-type testHandler struct {
-	t      testing.TB
-	tDone  *atomic.Bool
-	level  slog.Level
-	fields []groupOrAttr
+// testWriter guards writes to a test's output against the test completing.
+//
+// Writing to t after it has completed panics. Merely checking for completion
+// beforehand isn't sufficient: the testing package marks the test as done
+// without synchronization (deliberately, so that the race detector flags
+// unsynchronized goroutines), so a concurrent write races with that. Holding
+// mu across the write and in finish orders all writes before the test
+// completes. Afterwards, writes go to late instead.
+type testWriter struct {
+	mu   sync.Mutex
+	done bool
+	name string
+	w    io.Writer
+	late io.Writer
 }
 
-type groupOrAttr struct {
-	group string
-	attrs []slog.Attr
+func (tw *testWriter) finish() {
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+	tw.done = true
 }
 
-func (th *testHandler) Handle(ctx context.Context, r slog.Record) error {
-	// This doesn't do the right thing (as we're called from slog), but the API
-	// doesn't allow us to skip more callframes.
-	th.t.Helper()
-
-	// This is pretty inefficient if the handler has accumulated a lot of
-	// context, but necessary to make it trivially thread-safe. If it becomes
-	// necessary, we can always cache the handler we create here.
-	var buf bytes.Buffer
-	var h slog.Handler
-	h = slog.NewTextHandler(&buf, &slog.HandlerOptions{
-		AddSource: true,
-	})
-	for _, ga := range th.fields {
-		if ga.group != "" {
-			h = h.WithGroup(ga.group)
-		} else {
-			h = h.WithAttrs(ga.attrs)
+// Write is called once per log record by slog.TextHandler, with p being a
+// single newline-terminated line.
+func (tw *testWriter) Write(p []byte) (int, error) {
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+	if tw.done {
+		if _, err := fmt.Fprintf(tw.late, "hivetest: log after %s completed: %s", tw.name, p); err != nil {
+			return 0, err
 		}
+		return len(p), nil
 	}
-	if err := h.Handle(ctx, r); err != nil {
-		return err
-	}
-
-	defer func() {
-		if r := recover(); r != nil {
-			fmt.Fprintf(os.Stderr, "failed to log (likely because the test is no longer running): %v", r)
-		}
-	}()
-
-	// This is still TOCTOU racy with the call to log below, but we catch the
-	// potential panic above.
-	if th.tDone.Load() {
-		return fmt.Errorf("cannot log to finished test case")
-	}
-	// Chomp the newline.
-	th.t.Log(string(buf.Bytes()[:buf.Len()-1]))
-
-	return nil
-}
-
-func (th *testHandler) WithGroup(g string) slog.Handler {
-	nt := *th
-	nt.fields = append(slices.Clone(th.fields), groupOrAttr{group: g})
-	return &nt
-}
-
-func (th *testHandler) WithAttrs(as []slog.Attr) slog.Handler {
-	nt := *th
-	nt.fields = append(slices.Clone(th.fields), groupOrAttr{attrs: as})
-	return &nt
-}
-
-func (th *testHandler) Enabled(ctx context.Context, l slog.Level) bool {
-	return th.level <= l
+	return tw.w.Write(p)
 }
