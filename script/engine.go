@@ -43,6 +43,13 @@
 // The command prefix [cond] indicates that the command on the rest of the line
 // should only run when the condition is satisfied.
 //
+// A registered block command is written as a command line followed by an
+// opening brace, with its body ending at the matching closing brace. Block
+// commands control when and how often their body is executed.
+// An anonymous block may instead have command prefixes before its opening
+// brace: conditions guard the whole block, and status prefixes apply to body
+// commands that do not have their own prefix.
+//
 // A condition can be negated: [!root] means to run the rest of the line only if
 // the user is not root. Multiple conditions may be given for a single command,
 // for example, '[linux] [amd64] skip'. The command will run if all conditions
@@ -73,8 +80,10 @@ import (
 //
 // The same Engine may execute multiple scripts concurrently.
 type Engine struct {
-	Cmds  map[string]Cmd
-	Conds map[string]Cond
+	Cmds map[string]Cmd
+	// BlockCmds contains commands that control the execution of a script block.
+	BlockCmds map[string]BlockCmd
+	Conds     map[string]Cond
 
 	// If Quiet is true, Execute deletes log prints from the previous
 	// section when starting a new section.
@@ -97,6 +106,7 @@ type Engine struct {
 func NewEngine() *Engine {
 	return &Engine{
 		Cmds:             DefaultCmds(),
+		BlockCmds:        DefaultBlockCmds(),
 		Conds:            DefaultConds(),
 		RetryInterval:    defaultRetryInterval,
 		MaxRetryInterval: defaultMaxRetryInterval,
@@ -126,6 +136,40 @@ type Cmd interface {
 	// Usage returns the usage for the command, which the caller must not modify.
 	Usage() *CmdUsage
 }
+
+// A BlockCmd is a command that controls the execution of a block of script.
+// Unlike a Cmd, it receives a CallBlock function that executes the block.
+type BlockCmd interface {
+	// Run executes the block command.
+	//
+	// CallBlock may be called multiple times. Each call runs the block from the
+	// beginning with extraEnv temporarily added to the script environment.
+	Run(s *State, args []string, callBlock CallBlock) error
+
+	// Usage returns the usage for the block command, which the caller must not modify.
+	Usage() *CmdUsage
+}
+
+// CallBlock executes the body of a BlockCmd with extra environment variables.
+// The variables are removed after the call returns.
+type CallBlock func(extraEnv map[string]string) error
+
+// BlockCommand returns a new BlockCmd with a Usage method that returns a copy
+// of the given CmdUsage and a Run method that calls the given function.
+func BlockCommand(usage CmdUsage, run func(*State, []string, CallBlock) error) BlockCmd {
+	return &funcBlockCmd{usage: usage, run: run}
+}
+
+type funcBlockCmd struct {
+	usage CmdUsage
+	run   func(*State, []string, CallBlock) error
+}
+
+func (c *funcBlockCmd) Run(s *State, args []string, callBlock CallBlock) error {
+	return c.run(s, args, callBlock)
+}
+
+func (c *funcBlockCmd) Usage() *CmdUsage { return &c.usage }
 
 // A WaitFunc is a function called to retrieve the results of a Cmd.
 type WaitFunc func(*State) (stdout, stderr string, err error)
@@ -304,6 +348,83 @@ func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Wri
 			continue
 		}
 
+		if header, ok := blockHeader(line); ok {
+			headerLine := lineno
+			block, bodyStart, err := readBlock(script, &lineno, line)
+			if err != nil {
+				lineno = headerLine
+				return lineErr(fmt.Errorf("%w: %w", ParseError, err))
+			}
+			bodyEndLine := lineno
+			cmd, anonymous, err := parseBlockHeader(file, headerLine, header)
+			if err != nil {
+				lineno = headerLine
+				return lineErr(fmt.Errorf("%w: %w", ParseError, err))
+			}
+			if !anonymous && cmd.want == success && s.blockWant != success {
+				cmd.want = s.blockWant
+			}
+			if !anonymous && (cmd.want == successRetryOnFailure || cmd.want == failureRetryOnSuccess) {
+				lineno = headerLine
+				return lineErr(fmt.Errorf("%w: retry prefixes cannot be used on block commands", ParseError))
+			}
+			if cmd.background {
+				lineno = headerLine
+				return lineErr(cmdError(cmd, errors.New("block command cannot be run in background")))
+			}
+			lineno = headerLine
+			s.Logf("> %s\n", line)
+			ok, err := e.conditionsActive(s, cmd.conds)
+			if err != nil {
+				return lineErr(err)
+			}
+			if !ok {
+				s.Logf("[condition not met]\n")
+				lineno = bodyEndLine
+				continue
+			}
+			if anonymous {
+				err = s.withBlockWant(cmd.want, func() error {
+					body := strings.Repeat("\n", bodyStart-1) + block
+					return e.Execute(s, file, bufio.NewReader(strings.NewReader(body)), log)
+				})
+				if err != nil {
+					return lineErr(err)
+				}
+				lineno = bodyEndLine
+				continue
+			}
+			blockImpl := e.BlockCmds[cmd.name]
+			if blockImpl == nil {
+				return lineErr(cmdError(cmd, errors.New("unknown block command")))
+			}
+			var regexpArgs []int
+			if regexpArgsFunc := blockImpl.Usage().RegexpArgs; regexpArgsFunc != nil {
+				rawArgs := make([]string, 0, len(cmd.rawArgs))
+				for _, frags := range cmd.rawArgs {
+					var b strings.Builder
+					for _, frag := range frags {
+						b.WriteString(frag.s)
+					}
+					rawArgs = append(rawArgs, b.String())
+				}
+				regexpArgs = regexpArgsFunc(rawArgs...)
+			}
+			cmd.args = expandArgs(s, cmd.rawArgs, regexpArgs)
+			cmd.origArgs = cmd.args
+			err = e.runBlockCommand(s, cmd, blockImpl, func(extraEnv map[string]string) error {
+				return s.withEnv(extraEnv, func() error {
+					body := strings.Repeat("\n", bodyStart-1) + block
+					return e.Execute(s, file, bufio.NewReader(strings.NewReader(body)), log)
+				})
+			})
+			if err != nil {
+				return lineErr(err)
+			}
+			lineno = bodyEndLine
+			continue
+		}
+
 		cmd, err := parse(file, lineno, line)
 		if cmd == nil && err == nil {
 			continue // Ignore blank lines.
@@ -323,6 +444,9 @@ func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Wri
 		if !ok {
 			s.Logf("[condition not met]\n")
 			continue
+		}
+		if cmd.want == success && s.blockWant != success {
+			cmd.want = s.blockWant
 		}
 
 		impl := e.Cmds[cmd.name]
@@ -521,17 +645,37 @@ func (e *Engine) autocomplete(terminal *term.Terminal, engineState *State, state
 	}
 
 	if cmdIn == nil {
-		state.suggestions = slices.Sorted(maps.Keys(e.Cmds))
+		allNames := make(map[string]struct{}, len(e.Cmds)+len(e.BlockCmds))
+		for name := range e.Cmds {
+			allNames[name] = struct{}{}
+		}
+		for name := range e.BlockCmds {
+			allNames[name] = struct{}{}
+		}
+		state.suggestions = slices.Sorted(maps.Keys(allNames))
 	} else {
 		inCmd := len(cmdIn.rawArgs) == 0 && line[state.pos-1:state.pos] != " "
 
-		cmd, found := e.Cmds[cmdIn.name]
+		cmd, foundCmd := e.Cmds[cmdIn.name]
+		blockCmd, foundBlockCmd := e.BlockCmds[cmdIn.name]
+		found := foundCmd || foundBlockCmd
+		var usage *CmdUsage
+		if foundBlockCmd {
+			usage = blockCmd.Usage()
+		} else if foundCmd {
+			usage = cmd.Usage()
+		}
 		// If the currently typed out command is not found or when we do not have a space
 		// after the command yet.
 		if inCmd {
 			state.suggestions = make([]string, 0)
 			for name := range e.Cmds {
 				if strings.HasPrefix(name, cmdIn.name) {
+					state.suggestions = append(state.suggestions, name)
+				}
+			}
+			for name := range e.BlockCmds {
+				if _, exists := e.Cmds[name]; !exists && strings.HasPrefix(name, cmdIn.name) {
 					state.suggestions = append(state.suggestions, name)
 				}
 			}
@@ -542,8 +686,8 @@ func (e *Engine) autocomplete(terminal *term.Terminal, engineState *State, state
 				return "", 0, false
 			}
 
-			argsCB := cmd.Usage().AutocompleteArgs
-			flagsCB := cmd.Usage().AutocompleteFlag
+			argsCB := usage.AutocompleteArgs
+			flagsCB := usage.AutocompleteFlag
 			if argsCB == nil && flagsCB == nil {
 				return "", 0, false // No autocompletion for this command.
 			}
@@ -560,8 +704,8 @@ func (e *Engine) autocomplete(terminal *term.Terminal, engineState *State, state
 
 			} else {
 				fs := pflag.NewFlagSet(cmdIn.name, pflag.ContinueOnError)
-				if cmd.Usage().Flags != nil {
-					cmd.Usage().Flags(fs)
+				if usage.Flags != nil {
+					usage.Flags(fs)
 				}
 
 				argOrFlags := autocompleteParse(line[:state.pos], fs)
@@ -795,6 +939,67 @@ func parse(filename string, lineno int, line string) (cmd *command, err error) {
 		}
 	}
 	return cmd, nil
+}
+
+// blockHeader reports whether line ends with an unquoted, standalone opening
+// brace and, if so, returns the command line before the brace.
+func blockHeader(line string) (string, bool) {
+	if strings.HasPrefix(strings.TrimLeft(line, " \t"), "#") {
+		return "", false
+	}
+	line = strings.TrimRight(line, " \t\r")
+	if !strings.HasSuffix(line, "{") || len(line) == 1 || !strings.ContainsRune(" \t", rune(line[len(line)-2])) {
+		return "", false
+	}
+	header := strings.TrimRight(line[:len(line)-1], " \t\r")
+	return header, header != ""
+}
+
+func parseBlockHeader(file string, line int, header string) (*command, bool, error) {
+	const sentinel = "__anonymous_block__"
+	cmd, err := parse(file, line, strings.TrimSpace(header+" "+sentinel))
+	if err != nil {
+		return nil, false, err
+	}
+	if cmd.name == sentinel && len(cmd.rawArgs) == 0 {
+		cmd.name = ""
+		return cmd, true, nil
+	}
+	cmd, err = parse(file, line, header)
+	return cmd, false, err
+}
+
+// readBlock reads the body following header from script. The opening brace is
+// on the header line; closing braces must appear alone on a line.
+func readBlock(script *bufio.Reader, lineno *int, header string) (string, int, error) {
+	var body strings.Builder
+	depth := 1
+	bodyStart := *lineno + 1
+	for {
+		line, err := script.ReadString('\n')
+		if err != nil && err != io.EOF {
+			return "", bodyStart, err
+		}
+		if err == io.EOF && line == "" {
+			return "", bodyStart, fmt.Errorf("unterminated block starting with %q", header)
+		}
+		*lineno++
+		trimmed := strings.TrimSpace(strings.TrimSuffix(line, "\n"))
+		if trimmed == "}" {
+			depth--
+			if depth == 0 {
+				return body.String(), bodyStart, nil
+			}
+		} else {
+			body.WriteString(line)
+			if _, opens := blockHeader(line); opens {
+				depth++
+			}
+		}
+		if err == io.EOF {
+			return "", bodyStart, fmt.Errorf("unterminated block starting with %q", header)
+		}
+	}
 }
 
 // expandArgs expands the shell variables in rawArgs and joins them to form the
@@ -1090,6 +1295,81 @@ func (e *Engine) runCommand(s *State, cmd *command, impl Cmd) error {
 	return nil
 }
 
+func (e *Engine) runBlockCommand(s *State, cmd *command, impl BlockCmd, callBlock CallBlock) error {
+	usage := impl.Usage()
+	fs := pflag.NewFlagSet(cmd.name, pflag.ContinueOnError)
+	fs.Usage = func() {}
+	fs.SetOutput(s.logOut)
+	autocomplete := fs.String("autocomplete", "", "")
+	if usage.Flags != nil {
+		usage.Flags(fs)
+	}
+	if err := fs.Parse(cmd.origArgs); err != nil {
+		if errors.Is(err, pflag.ErrHelp) {
+			out := new(strings.Builder)
+			err = e.ListCmds(out, true, "^"+cmd.name+"$")
+			s.stdout = out.String()
+			if s.stdout != "" {
+				s.Logf("[stdout]\n%s", s.stdout)
+			}
+			return err
+		}
+		if usage.Flags != nil {
+			return cmdError(cmd, err)
+		}
+	} else {
+		cmd.args = fs.Args()
+		s.Flags = fs
+	}
+	if fs.Changed("autocomplete") {
+		if usage.AutocompleteArgs == nil && usage.AutocompleteFlag == nil {
+			return nil
+		}
+		argOrFlags := autocompleteParse(*autocomplete, fs)
+		if len(argOrFlags) == 0 {
+			return nil
+		}
+		argOrFlags = argOrFlags[1:]
+		var before []string
+		for i := 0; i < len(argOrFlags)-1; i++ {
+			if argOrFlags[i].arg != "" {
+				before = append(before, argOrFlags[i].arg)
+			}
+		}
+		last := argOrFlags[len(argOrFlags)-1]
+		var suggestions []string
+		if last.argOrFlag == 1 {
+			if usage.AutocompleteFlag == nil {
+				return nil
+			}
+			if last.hasValue {
+				for _, suggestion := range usage.AutocompleteFlag(s, before, last.flagName, last.flagValue) {
+					suggestions = append(suggestions, cmd.name+" "+(*autocomplete)[:len(*autocomplete)-len(last.flagValue)]+suggestion)
+				}
+			} else if fs.Lookup(last.flagName) == nil {
+				fs.VisitAll(func(f *pflag.Flag) {
+					if last.flagName == "" || strings.HasPrefix(f.Name, last.flagName) {
+						suggestions = append(suggestions, cmd.name+" "+(*autocomplete)[:len(*autocomplete)-len(last.flagName)]+f.Name)
+					}
+				})
+			}
+		} else {
+			if usage.AutocompleteArgs == nil {
+				return nil
+			}
+			for _, suggestion := range usage.AutocompleteArgs(s, before, last.arg) {
+				suggestions = append(suggestions, cmd.name+" "+(*autocomplete)[:len(*autocomplete)-len(last.arg)]+suggestion)
+			}
+		}
+		s.stdout = strings.Join(suggestions, "\n") + "\n"
+		if len(suggestions) > 0 {
+			s.Logf("[stdout]\n%s", s.stdout)
+		}
+		return nil
+	}
+	return checkStatus(cmd, impl.Run(s, cmd.args, callBlock))
+}
+
 func checkStatus(cmd *command, err error) error {
 	if err == nil {
 		if cmd.want == failure || cmd.want == failureRetryOnSuccess {
@@ -1144,14 +1424,20 @@ func (e *Engine) ListCmds(w io.Writer, verbose bool, regexMatch string) error {
 	for name := range e.Cmds {
 		names = append(names, name)
 	}
+	for name := range e.BlockCmds {
+		if _, exists := e.Cmds[name]; !exists {
+			names = append(names, name)
+		}
+	}
 	sort.Strings(names)
 
 	for _, name := range names {
 		if re != nil && !re.MatchString(name) {
 			continue
 		}
-		cmd, ok := e.Cmds[name]
-		if !ok {
+		cmd, isCmd := e.Cmds[name]
+		blockCmd, isBlockCmd := e.BlockCmds[name]
+		if !isCmd && !isBlockCmd {
 			_, err := fmt.Fprintf(w, "command %q is not registered\n", name)
 			if err != nil {
 				return err
@@ -1159,10 +1445,17 @@ func (e *Engine) ListCmds(w io.Writer, verbose bool, regexMatch string) error {
 			return nil
 		}
 
-		usage := cmd.Usage()
+		var usage *CmdUsage
+		if isBlockCmd {
+			usage = blockCmd.Usage()
+		} else {
+			usage = cmd.Usage()
+		}
 
 		suffix := ""
-		if usage.Async {
+		if isBlockCmd {
+			suffix = " { ... }"
+		} else if usage.Async {
 			suffix = " [&]"
 		}
 
