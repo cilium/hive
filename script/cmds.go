@@ -57,6 +57,7 @@ func DefaultCmds() map[string]Cmd {
 		"symlink": Symlink(),
 		"wait":    Wait(),
 		"break":   Break(),
+		"call":    Call(),
 	}
 }
 
