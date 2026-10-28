@@ -239,18 +239,15 @@ func (s *State) Setenv(key, value string) error {
 	return nil
 }
 
-func (s *State) withEnv(env map[string]string, fn func() error) (err error) {
+func (s *State) withEnv(env map[string]string, fn func() error) error {
 	type previous struct {
 		value string
 		ok    bool
 	}
 	old := make(map[string]previous, len(env))
-	for key, value := range env {
+	for key := range env {
 		previousValue, ok := s.envMap[key]
 		old[key] = previous{value: previousValue, ok: ok}
-		if err := s.Setenv(key, value); err != nil {
-			return err
-		}
 	}
 	defer func() {
 		for key, value := range old {
@@ -269,6 +266,11 @@ func (s *State) withEnv(env map[string]string, fn func() error) (err error) {
 			s.env = filtered
 		}
 	}()
+	for key, value := range env {
+		if err := s.Setenv(key, value); err != nil {
+			return err
+		}
+	}
 	return fn()
 }
 

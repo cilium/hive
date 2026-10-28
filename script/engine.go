@@ -43,6 +43,10 @@
 // The command prefix [cond] indicates that the command on the rest of the line
 // should only run when the condition is satisfied.
 //
+// A registered block command is written as a command line followed by an
+// opening brace, with its body ending at the matching closing brace. Block
+// commands control when and how often their body is executed.
+//
 // A condition can be negated: [!root] means to run the rest of the line only if
 // the user is not root. Multiple conditions may be given for a single command,
 // for example, '[linux] [amd64] skip'. The command will run if all conditions
@@ -73,7 +77,8 @@ import (
 //
 // The same Engine may execute multiple scripts concurrently.
 type Engine struct {
-	Cmds      map[string]Cmd
+	Cmds map[string]Cmd
+	// BlockCmds contains commands that control the execution of a script block.
 	BlockCmds map[string]BlockCmd
 	Conds     map[string]Cond
 
@@ -98,7 +103,7 @@ type Engine struct {
 func NewEngine() *Engine {
 	return &Engine{
 		Cmds:             DefaultCmds(),
-		BlockCmds:        map[string]BlockCmd{},
+		BlockCmds:        DefaultBlockCmds(),
 		Conds:            DefaultConds(),
 		RetryInterval:    defaultRetryInterval,
 		MaxRetryInterval: defaultMaxRetryInterval,
@@ -356,6 +361,10 @@ func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Wri
 			if cmd.want == successRetryOnFailure || cmd.want == failureRetryOnSuccess {
 				lineno = headerLine
 				return lineErr(fmt.Errorf("%w: retry prefixes cannot be used on block commands", ParseError))
+			}
+			if cmd.background {
+				lineno = headerLine
+				return lineErr(cmdError(cmd, errors.New("block command cannot be run in background")))
 			}
 			lineno = headerLine
 			s.Logf("> %s\n", line)
@@ -616,17 +625,37 @@ func (e *Engine) autocomplete(terminal *term.Terminal, engineState *State, state
 	}
 
 	if cmdIn == nil {
-		state.suggestions = slices.Sorted(maps.Keys(e.Cmds))
+		allNames := make(map[string]struct{}, len(e.Cmds)+len(e.BlockCmds))
+		for name := range e.Cmds {
+			allNames[name] = struct{}{}
+		}
+		for name := range e.BlockCmds {
+			allNames[name] = struct{}{}
+		}
+		state.suggestions = slices.Sorted(maps.Keys(allNames))
 	} else {
 		inCmd := len(cmdIn.rawArgs) == 0 && line[state.pos-1:state.pos] != " "
 
-		cmd, found := e.Cmds[cmdIn.name]
+		cmd, foundCmd := e.Cmds[cmdIn.name]
+		blockCmd, foundBlockCmd := e.BlockCmds[cmdIn.name]
+		found := foundCmd || foundBlockCmd
+		var usage *CmdUsage
+		if foundBlockCmd {
+			usage = blockCmd.Usage()
+		} else if foundCmd {
+			usage = cmd.Usage()
+		}
 		// If the currently typed out command is not found or when we do not have a space
 		// after the command yet.
 		if inCmd {
 			state.suggestions = make([]string, 0)
 			for name := range e.Cmds {
 				if strings.HasPrefix(name, cmdIn.name) {
+					state.suggestions = append(state.suggestions, name)
+				}
+			}
+			for name := range e.BlockCmds {
+				if _, exists := e.Cmds[name]; !exists && strings.HasPrefix(name, cmdIn.name) {
 					state.suggestions = append(state.suggestions, name)
 				}
 			}
@@ -637,8 +666,8 @@ func (e *Engine) autocomplete(terminal *term.Terminal, engineState *State, state
 				return "", 0, false
 			}
 
-			argsCB := cmd.Usage().AutocompleteArgs
-			flagsCB := cmd.Usage().AutocompleteFlag
+			argsCB := usage.AutocompleteArgs
+			flagsCB := usage.AutocompleteFlag
 			if argsCB == nil && flagsCB == nil {
 				return "", 0, false // No autocompletion for this command.
 			}
@@ -655,8 +684,8 @@ func (e *Engine) autocomplete(terminal *term.Terminal, engineState *State, state
 
 			} else {
 				fs := pflag.NewFlagSet(cmdIn.name, pflag.ContinueOnError)
-				if cmd.Usage().Flags != nil {
-					cmd.Usage().Flags(fs)
+				if usage.Flags != nil {
+					usage.Flags(fs)
 				}
 
 				argOrFlags := autocompleteParse(line[:state.pos], fs)
@@ -895,11 +924,15 @@ func parse(filename string, lineno int, line string) (cmd *command, err error) {
 // blockHeader reports whether line ends with an unquoted, standalone opening
 // brace and, if so, returns the command line before the brace.
 func blockHeader(line string) (string, bool) {
+	if strings.HasPrefix(strings.TrimLeft(line, " \t"), "#") {
+		return "", false
+	}
 	line = strings.TrimRight(line, " \t\r")
 	if !strings.HasSuffix(line, "{") || len(line) == 1 || !strings.ContainsRune(" \t", rune(line[len(line)-2])) {
 		return "", false
 	}
-	return strings.TrimRight(line[:len(line)-1], " \t\r"), true
+	header := strings.TrimRight(line[:len(line)-1], " \t\r")
+	return header, header != ""
 }
 
 // readBlock reads the body following header from script. The opening brace is
@@ -1233,6 +1266,7 @@ func (e *Engine) runBlockCommand(s *State, cmd *command, impl BlockCmd, callBloc
 	fs := pflag.NewFlagSet(cmd.name, pflag.ContinueOnError)
 	fs.Usage = func() {}
 	fs.SetOutput(s.logOut)
+	autocomplete := fs.String("autocomplete", "", "")
 	if usage.Flags != nil {
 		usage.Flags(fs)
 	}
@@ -1252,6 +1286,52 @@ func (e *Engine) runBlockCommand(s *State, cmd *command, impl BlockCmd, callBloc
 	} else {
 		cmd.args = fs.Args()
 		s.Flags = fs
+	}
+	if fs.Changed("autocomplete") {
+		if usage.AutocompleteArgs == nil && usage.AutocompleteFlag == nil {
+			return nil
+		}
+		argOrFlags := autocompleteParse(*autocomplete, fs)
+		if len(argOrFlags) == 0 {
+			return nil
+		}
+		argOrFlags = argOrFlags[1:]
+		var before []string
+		for i := 0; i < len(argOrFlags)-1; i++ {
+			if argOrFlags[i].arg != "" {
+				before = append(before, argOrFlags[i].arg)
+			}
+		}
+		last := argOrFlags[len(argOrFlags)-1]
+		var suggestions []string
+		if last.argOrFlag == 1 {
+			if usage.AutocompleteFlag == nil {
+				return nil
+			}
+			if last.hasValue {
+				for _, suggestion := range usage.AutocompleteFlag(s, before, last.flagName, last.flagValue) {
+					suggestions = append(suggestions, cmd.name+" "+(*autocomplete)[:len(*autocomplete)-len(last.flagValue)]+suggestion)
+				}
+			} else if fs.Lookup(last.flagName) == nil {
+				fs.VisitAll(func(f *pflag.Flag) {
+					if last.flagName == "" || strings.HasPrefix(f.Name, last.flagName) {
+						suggestions = append(suggestions, cmd.name+" "+(*autocomplete)[:len(*autocomplete)-len(last.flagName)]+f.Name)
+					}
+				})
+			}
+		} else {
+			if usage.AutocompleteArgs == nil {
+				return nil
+			}
+			for _, suggestion := range usage.AutocompleteArgs(s, before, last.arg) {
+				suggestions = append(suggestions, cmd.name+" "+(*autocomplete)[:len(*autocomplete)-len(last.arg)]+suggestion)
+			}
+		}
+		s.stdout = strings.Join(suggestions, "\n") + "\n"
+		if len(suggestions) > 0 {
+			s.Logf("[stdout]\n%s", s.stdout)
+		}
+		return nil
 	}
 	return checkStatus(cmd, impl.Run(s, cmd.args, callBlock))
 }
