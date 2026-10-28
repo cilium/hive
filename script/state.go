@@ -239,6 +239,39 @@ func (s *State) Setenv(key, value string) error {
 	return nil
 }
 
+func (s *State) withEnv(env map[string]string, fn func() error) (err error) {
+	type previous struct {
+		value string
+		ok    bool
+	}
+	old := make(map[string]previous, len(env))
+	for key, value := range env {
+		previousValue, ok := s.envMap[key]
+		old[key] = previous{value: previousValue, ok: ok}
+		if err := s.Setenv(key, value); err != nil {
+			return err
+		}
+	}
+	defer func() {
+		for key, value := range old {
+			if value.ok {
+				_ = s.Setenv(key, value.value)
+				continue
+			}
+			delete(s.envMap, key)
+			filtered := s.env[:0]
+			for _, kv := range s.env {
+				name, _, _ := strings.Cut(kv, "=")
+				if name != key {
+					filtered = append(filtered, kv)
+				}
+			}
+			s.env = filtered
+		}
+	}()
+	return fn()
+}
+
 // Stdout returns the stdout output of the last command run,
 // or the empty string if no command has been run.
 func (s *State) Stdout() string { return s.stdout }
