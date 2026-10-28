@@ -46,6 +46,9 @@
 // A registered block command is written as a command line followed by an
 // opening brace, with its body ending at the matching closing brace. Block
 // commands control when and how often their body is executed.
+// An anonymous block may instead have command prefixes before its opening
+// brace: conditions guard the whole block, and status prefixes apply to body
+// commands that do not have their own prefix.
 //
 // A condition can be negated: [!root] means to run the rest of the line only if
 // the user is not root. Multiple conditions may be given for a single command,
@@ -353,12 +356,15 @@ func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Wri
 				return lineErr(fmt.Errorf("%w: %w", ParseError, err))
 			}
 			bodyEndLine := lineno
-			cmd, err := parse(file, headerLine, header)
+			cmd, anonymous, err := parseBlockHeader(file, headerLine, header)
 			if err != nil {
 				lineno = headerLine
 				return lineErr(fmt.Errorf("%w: %w", ParseError, err))
 			}
-			if cmd.want == successRetryOnFailure || cmd.want == failureRetryOnSuccess {
+			if !anonymous && cmd.want == success && s.blockWant != success {
+				cmd.want = s.blockWant
+			}
+			if !anonymous && (cmd.want == successRetryOnFailure || cmd.want == failureRetryOnSuccess) {
 				lineno = headerLine
 				return lineErr(fmt.Errorf("%w: retry prefixes cannot be used on block commands", ParseError))
 			}
@@ -374,6 +380,17 @@ func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Wri
 			}
 			if !ok {
 				s.Logf("[condition not met]\n")
+				lineno = bodyEndLine
+				continue
+			}
+			if anonymous {
+				err = s.withBlockWant(cmd.want, func() error {
+					body := strings.Repeat("\n", bodyStart-1) + block
+					return e.Execute(s, file, bufio.NewReader(strings.NewReader(body)), log)
+				})
+				if err != nil {
+					return lineErr(err)
+				}
 				lineno = bodyEndLine
 				continue
 			}
@@ -427,6 +444,9 @@ func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Wri
 		if !ok {
 			s.Logf("[condition not met]\n")
 			continue
+		}
+		if cmd.want == success && s.blockWant != success {
+			cmd.want = s.blockWant
 		}
 
 		impl := e.Cmds[cmd.name]
@@ -933,6 +953,20 @@ func blockHeader(line string) (string, bool) {
 	}
 	header := strings.TrimRight(line[:len(line)-1], " \t\r")
 	return header, header != ""
+}
+
+func parseBlockHeader(file string, line int, header string) (*command, bool, error) {
+	const sentinel = "__anonymous_block__"
+	cmd, err := parse(file, line, strings.TrimSpace(header+" "+sentinel))
+	if err != nil {
+		return nil, false, err
+	}
+	if cmd.name == sentinel && len(cmd.rawArgs) == 0 {
+		cmd.name = ""
+		return cmd, true, nil
+	}
+	cmd, err = parse(file, line, header)
+	return cmd, false, err
 }
 
 // readBlock reads the body following header from script. The opening brace is

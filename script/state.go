@@ -25,6 +25,8 @@ import (
 type State struct {
 	engine *Engine // the engine currently executing the script, if any
 
+	blockWant expectedStatus // status prefix inherited from an anonymous block
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	log    bytes.Buffer
@@ -271,6 +273,15 @@ func (s *State) withEnv(env map[string]string, fn func() error) error {
 			return err
 		}
 	}
+	return fn()
+}
+
+func (s *State) withBlockWant(want expectedStatus, fn func() error) error {
+	previous := s.blockWant
+	if want != success {
+		s.blockWant = want
+	}
+	defer func() { s.blockWant = previous }()
 	return fn()
 }
 
