@@ -1,0 +1,16 @@
+# Exercise calling a txtar script with isolated files and environment.
+env SCENARIO_PARAM=parent
+env CALL_LEAK=parent
+withenv SCENARIO_PARAM=hello {
+  call $DATADIR/called.txtar
+}
+
+# Environment and working-directory changes in the called script are restored.
+env SCENARIO_PARAM
+stdout '^SCENARIO_PARAM=parent$'
+env CALL_LEAK
+stdout '^CALL_LEAK=parent$'
+exists parent-fixture.txt
+
+-- parent-fixture.txt --
+from parent

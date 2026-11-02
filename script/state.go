@@ -25,6 +25,8 @@ import (
 type State struct {
 	engine *Engine // the engine currently executing the script, if any
 
+	blockWant expectedStatus // status prefix inherited from an anonymous block
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	log    bytes.Buffer
@@ -237,6 +239,50 @@ func (s *State) Setenv(key, value string) error {
 	s.env = cleanEnv(append(s.env, key+"="+value), s.pwd)
 	s.envMap[key] = value
 	return nil
+}
+
+func (s *State) withEnv(env map[string]string, fn func() error) error {
+	type previous struct {
+		value string
+		ok    bool
+	}
+	old := make(map[string]previous, len(env))
+	for key := range env {
+		previousValue, ok := s.envMap[key]
+		old[key] = previous{value: previousValue, ok: ok}
+	}
+	defer func() {
+		for key, value := range old {
+			if value.ok {
+				_ = s.Setenv(key, value.value)
+				continue
+			}
+			delete(s.envMap, key)
+			filtered := s.env[:0]
+			for _, kv := range s.env {
+				name, _, _ := strings.Cut(kv, "=")
+				if name != key {
+					filtered = append(filtered, kv)
+				}
+			}
+			s.env = filtered
+		}
+	}()
+	for key, value := range env {
+		if err := s.Setenv(key, value); err != nil {
+			return err
+		}
+	}
+	return fn()
+}
+
+func (s *State) withBlockWant(want expectedStatus, fn func() error) error {
+	previous := s.blockWant
+	if want != success {
+		s.blockWant = want
+	}
+	defer func() { s.blockWant = previous }()
+	return fn()
 }
 
 // Stdout returns the stdout output of the last command run,
