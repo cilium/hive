@@ -31,6 +31,6 @@ stdout [-q] [--count=int] [--quiet] 'pattern'
 	The -q flag suppresses printing of matches.
 
 	Flags:
-	      --count int   Exact count of matches
-	  -q, --quiet       Suppress printing of matches
+	      --count int            Exact count of matches
+	  -q, --quiet[=true|false]   Suppress printing of matches
 	
