@@ -7,12 +7,183 @@ package script
 import (
 	"errors"
 	"fmt"
-	"github.com/spf13/pflag"
+	"strconv"
+	"strings"
 	"time"
+
+	"github.com/spf13/pflag"
 )
 
-// DefaultBlockCmds returns the block commands included in a basic script engine.
-func DefaultBlockCmds() map[string]BlockCmd { return map[string]BlockCmd{"retry": Retry()} }
+// DefaultBlockCmds returns the block commands included in a basic script
+// engine.
+func DefaultBlockCmds() map[string]BlockCmd {
+	return map[string]BlockCmd{
+		"foreach": Foreach(),
+		"when":    When(),
+		"unless":  Unless(),
+		"repeat":  Repeat(),
+		"retry":   Retry(),
+		"withenv": WithEnv(),
+	}
+}
+
+// WithEnv returns a block command that executes its body with temporary
+// environment variables.
+func WithEnv() BlockCmd {
+	return BlockCommand(
+		CmdUsage{
+			Summary: "execute a block with temporary environment variables",
+			Args:    "assignments...",
+			Detail: []string{
+				"Assignments use KEY=VALUE syntax and are visible only while the block runs.",
+				"Changes to other variables made inside the block persist after it finishes.",
+			},
+		},
+		func(_ *State, args []string, callBlock CallBlock) error {
+			if len(args) == 0 {
+				return fmt.Errorf("%w: withenv requires at least one KEY=VALUE assignment", ErrUsage)
+			}
+			extraEnv := make(map[string]string, len(args))
+			for _, assignment := range args {
+				key, value, ok := strings.Cut(assignment, "=")
+				if !ok {
+					return fmt.Errorf("withenv assignment %q must use KEY=VALUE syntax", assignment)
+				}
+				if err := validateBlockVariable(key); err != nil {
+					return err
+				}
+				extraEnv[key] = value
+			}
+			return callBlock(extraEnv)
+		},
+	)
+}
+
+// Foreach returns a block command that executes its body once for each value,
+// setting variable to the current value for that call.
+func Foreach() BlockCmd {
+	return BlockCommand(
+		CmdUsage{
+			Summary: "execute a block for each value",
+			Args:    "variable values...",
+			Detail: []string{
+				"The variable is set to each value for the corresponding block execution. With no values, the block is skipped.",
+				"Changes to the variable inside the block are discarded after that execution; changes to other variables persist.",
+			},
+		},
+		func(_ *State, args []string, callBlock CallBlock) error {
+			if len(args) < 1 {
+				return fmt.Errorf("%w: foreach requires a variable", ErrUsage)
+			}
+			if err := validateBlockVariable(args[0]); err != nil {
+				return err
+			}
+			for _, value := range args[1:] {
+				if err := callBlock(map[string]string{args[0]: value}); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	)
+}
+
+// When returns a block command that executes its body if its argument is "1",
+// "t", or "true", ignoring case.
+func When() BlockCmd {
+	return BlockCommand(
+		CmdUsage{
+			Summary: "execute a block when its argument is true",
+			Args:    "value",
+			Detail: []string{
+				"True values are '1', 't', and 'true' (case-insensitive for the letters).",
+				"All other values skip the block.",
+			},
+		},
+		func(_ *State, args []string, callBlock CallBlock) error {
+			if len(args) != 1 {
+				return fmt.Errorf("%w: when requires one value", ErrUsage)
+			}
+			if blockValueIsTrue(args[0]) {
+				return callBlock(nil)
+			}
+			return nil
+		},
+	)
+}
+
+// Unless returns a block command that executes its body if its argument is not
+// "1", "t", or "true", ignoring case.
+func Unless() BlockCmd {
+	return BlockCommand(
+		CmdUsage{
+			Summary: "execute a block when its argument is false",
+			Args:    "value",
+			Detail: []string{
+				"The block is skipped when value is '1', 't', or 'true' (case-insensitive for the letters).",
+				"All other values run the block.",
+			},
+		},
+		func(_ *State, args []string, callBlock CallBlock) error {
+			if len(args) != 1 {
+				return fmt.Errorf("%w: unless requires one value", ErrUsage)
+			}
+			if !blockValueIsTrue(args[0]) {
+				return callBlock(nil)
+			}
+			return nil
+		},
+	)
+}
+
+// Repeat returns a block command that executes its body count times, setting
+// variable to the zero-based iteration index for each call.
+func Repeat() BlockCmd {
+	return BlockCommand(
+		CmdUsage{
+			Summary: "repeat a block a fixed number of times",
+			Args:    "variable count",
+			Detail: []string{
+				"The variable is set to the zero-based iteration index for each block execution.",
+				"Changes to the variable inside the block are discarded after that execution; changes to other variables persist.",
+			},
+		},
+		func(_ *State, args []string, callBlock CallBlock) error {
+			if len(args) != 2 {
+				return fmt.Errorf("%w: repeat requires a variable and count", ErrUsage)
+			}
+			if err := validateBlockVariable(args[0]); err != nil {
+				return err
+			}
+			count, err := strconv.Atoi(args[1])
+			if err != nil || count < 0 {
+				return fmt.Errorf("repeat count must be a non-negative integer, got %q", args[1])
+			}
+			for i := 0; i < count; i++ {
+				if err := callBlock(map[string]string{args[0]: strconv.Itoa(i)}); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	)
+}
+
+func blockValueIsTrue(value string) bool {
+	switch strings.ToLower(value) {
+	case "1", "t", "true":
+		return true
+	default:
+		return false
+	}
+}
+
+func validateBlockVariable(name string) error {
+	if name == "" || strings.ContainsAny(name, "=\x00") {
+		return fmt.Errorf("invalid block variable name %q", name)
+	}
+	return nil
+}
 
 // Retry returns a block command that repeats its body until it succeeds.
 //
