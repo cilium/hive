@@ -49,12 +49,10 @@
 // are satisfied.
 //
 // Package script is particularly good for writing tests.
-// Ironically, it has no tests.
 package script
 
 import (
 	"bufio"
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -140,7 +138,7 @@ type CmdUsage struct {
 	Args string
 
 	// flags for the command, optional. If provided, then args passed to the command will not include any
-	// of the flag arguments. The [plafg.FlagSet] is available to the command via [State.Flags].
+	// of the flag arguments. The [pflag.FlagSet] is available to the command via [State.Flags].
 	Flags func(fs *pflag.FlagSet)
 
 	Detail []string // zero or more sentences in the style of the Description section of a Unix 'man' page
@@ -200,6 +198,29 @@ var ParseError = errors.New("parse error")
 // before returning. To stop those, use [State.CloseAndWait] or the
 // [Wait] command.
 func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Writer) (err error) {
+	err = e.execute(s, file, &statementReader{reader: script}, log, executeOptions{commentsAreSections: true})
+	var stop stopError
+	if errors.As(err, &stop) {
+		_, err = fmt.Fprintln(log, stop)
+	}
+	return err
+}
+
+// executeOptions controls the differences between script and interactive
+// execution while keeping both on the same command runner.
+type executeOptions struct {
+	interactive         bool
+	suppressCmdLog      bool
+	commentsAreSections bool
+}
+
+func (e *Engine) execute(s *State, file string, source *statementReader, log io.Writer, opts executeOptions) (err error) {
+	if s.engine != nil {
+		// A command may re-enter either execution API. Keep its flags and retry
+		// state intact while allowing changes to the script environment and I/O.
+		flags, retryCount, retriesRequested := s.Flags, s.RetryCount, s.retriesRequested
+		defer func() { s.Flags, s.RetryCount, s.retriesRequested = flags, retryCount, retriesRequested }()
+	}
 	defer func(prev *Engine) { s.engine = prev }(s.engine)
 	s.engine = e
 	defer func(prev io.Writer) { s.logOut = prev }(s.logOut)
@@ -216,7 +237,7 @@ func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Wri
 
 	var (
 		sectionStart time.Time
-		sectionCmds  []*command
+		sectionCmds  []func() error
 	)
 	// endSection flushes the logs for the current section from s.log to log.
 	// ok indicates whether all commands in the section succeeded.
@@ -249,15 +270,21 @@ func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Wri
 
 	var lineno int
 	lineErr := func(err error) error {
+		if opts.interactive {
+			return err
+		}
 		if errors.As(err, new(*CommandError)) {
 			return err
 		}
 		return fmt.Errorf("%s:%d: %w", file, lineno, err)
 	}
 
-	// In case of failure or panic, flush any pending logs for the section.
+	// A stop completes the section successfully. Other errors and panics must
+	// retain its logs.
 	defer func() {
-		if sErr := endSection(false); sErr != nil && err == nil {
+		var stop stopError
+		stopped := errors.As(err, &stop)
+		if sErr := endSection(stopped); sErr != nil && (err == nil || stopped) {
 			err = lineErr(sErr)
 		}
 	}()
@@ -269,21 +296,19 @@ func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Wri
 			return lineErr(err)
 		}
 
-		line, err := script.ReadString('\n')
-		if err == io.EOF {
-			if line == "" {
-				break // Reached the end of the script.
-			}
-			// If the script doesn't end in a newline, interpret the final line.
-		} else if err != nil {
-			return lineErr(err)
+		stmt, readErr := source.next()
+		if readErr == io.EOF {
+			break
 		}
-		line = strings.TrimSuffix(line, "\n")
-		lineno++
+		if readErr != nil {
+			return lineErr(readErr)
+		}
+		lineno = stmt.line
+		line := stmt.text
 
 		// The comment character "#" at the start of the line delimits a section of
 		// the script.
-		if strings.HasPrefix(line, "#") {
+		if stmt.kind == commentStatement && opts.commentsAreSections {
 			// If there was a previous section, the fact that we are starting a new
 			// one implies the success of the previous one.
 			//
@@ -303,14 +328,18 @@ func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Wri
 			}
 			continue
 		}
+		if stmt.kind == commentStatement {
+			continue
+		}
 
 		cmd, err := parse(file, lineno, line)
 		if cmd == nil && err == nil {
 			continue // Ignore blank lines.
 		}
-		sectionCmds = append(sectionCmds, cmd)
 
-		s.Logf("> %s\n", line)
+		if !opts.suppressCmdLog {
+			s.Logf("> %s\n", line)
+		}
 		if err != nil {
 			return lineErr(fmt.Errorf("%w: %w", ParseError, err))
 		}
@@ -327,32 +356,24 @@ func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Wri
 
 		impl := e.Cmds[cmd.name]
 
-		// Expand variables in arguments.
-		var regexpArgs []int
 		if impl != nil {
-			usage := impl.Usage()
-			if usage.RegexpArgs != nil {
-				// First join rawArgs without expansion to pass to RegexpArgs.
-				rawArgs := make([]string, 0, len(cmd.rawArgs))
-				for _, frags := range cmd.rawArgs {
-					var b strings.Builder
-					for _, frag := range frags {
-						b.WriteString(frag.s)
-					}
-					rawArgs = append(rawArgs, b.String())
-				}
-				regexpArgs = usage.RegexpArgs(rawArgs...)
-			}
+			prepareArgs(s, cmd, impl.Usage())
+		} else {
+			prepareArgs(s, cmd, nil)
 		}
-		cmd.origArgs = expandArgs(s, cmd.rawArgs, regexpArgs)
-		cmd.args = cmd.origArgs
+
 		s.RetryCount = 0
 		s.retriesRequested = cmd.want == successRetryOnFailure || cmd.want == failureRetryOnSuccess
 
-		// Run the command.
-		err = e.runCommand(s, cmd, impl)
+		// Keep the prepared invocation so legacy retries replay blocks as well
+		// as ordinary commands in the current section.
+		run := func() error {
+			return e.runCommand(s, cmd, impl)
+		}
+		sectionCmds = append(sectionCmds, run)
+		err = run()
 		if err != nil {
-			if s.retriesRequested {
+			if s.retriesRequested && !unrecoverableError(err) {
 				retryStart := sectionStart
 
 				// Clear the section start to avoid the deferred endSection() printing a timestamp.
@@ -365,6 +386,9 @@ func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Wri
 				// Command wants retries. Retry the whole section
 				backoff := exponentialBackoff{max: maxRetryInterval, interval: retryInterval}
 				for err != nil {
+					if unrecoverableError(err) {
+						return lineErr(err)
+					}
 					if e.MaxRetries != 0 && s.RetryCount >= int(e.MaxRetries) {
 						s.RetryCount = 0
 						return lineErr(err)
@@ -379,9 +403,8 @@ func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Wri
 					case <-time.After(retryDuration):
 					}
 					s.RetryCount++
-					for _, cmd := range sectionCmds {
-						impl := e.Cmds[cmd.name]
-						if err = e.runCommand(s, cmd, impl); err != nil {
+					for _, run := range sectionCmds {
+						if err = run(); err != nil {
 							break
 						}
 					}
@@ -390,15 +413,6 @@ func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Wri
 				fmt.Fprintf(log, "(command %q succeeded after %d retries in %.3fs)\n", line, s.RetryCount, time.Since(retryStart).Seconds())
 				s.RetryCount = 0
 			} else {
-				if stop := (stopError{}); errors.As(err, &stop) {
-					// Since the 'stop' command halts execution of the entire script,
-					// log its message separately from the section in which it appears.
-					err = endSection(true)
-					s.Logf("%v\n", stop)
-					if err == nil {
-						return nil
-					}
-				}
 				return lineErr(err)
 			}
 		}
@@ -410,67 +424,9 @@ func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Wri
 	return nil
 }
 
-func (e *Engine) ExecuteLine(s *State, line string, log io.Writer) (err error) {
-	defer func(prev *Engine) { s.engine = prev }(s.engine)
-	s.engine = e
-	defer func(prev io.Writer) { s.logOut = prev }(s.logOut)
-	s.logOut = log
-	defer s.FlushLog()
-
-	cmd, err := parse("<stdin>", 0, line)
-	if cmd == nil && err == nil {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-
-	// Evaluate condition guards.
-	ok, err := e.conditionsActive(s, cmd.conds)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		s.Logf("[condition not met]\n")
-		return
-	}
-
-	impl := e.Cmds[cmd.name]
-
-	// Expand variables in arguments.
-	var regexpArgs []int
-	if impl != nil {
-		usage := impl.Usage()
-		if usage.RegexpArgs != nil {
-			// First join rawArgs without expansion to pass to RegexpArgs.
-			rawArgs := make([]string, 0, len(cmd.rawArgs))
-			for _, frags := range cmd.rawArgs {
-				var b strings.Builder
-				for _, frag := range frags {
-					b.WriteString(frag.s)
-				}
-				rawArgs = append(rawArgs, b.String())
-			}
-			regexpArgs = usage.RegexpArgs(rawArgs...)
-		}
-	}
-	cmd.args = expandArgs(s, cmd.rawArgs, regexpArgs)
-	cmd.origArgs = cmd.args
-
-	// Run the command.
-	err = e.runCommand(s, cmd, impl)
-	if err != nil {
-		if stop := (stopError{}); errors.As(err, &stop) {
-			// Since the 'stop' command halts execution of the entire script,
-			// log its message separately from the section in which it appears.
-			s.Logf("%v\n", stop)
-			if err == nil {
-				return nil
-			}
-		}
-		return err
-	}
-	return nil
+func (e *Engine) ExecuteLine(s *State, line string, log io.Writer) error {
+	return e.execute(s, "<stdin>", &statementReader{reader: bufio.NewReader(strings.NewReader(line)), line: -1}, log,
+		executeOptions{interactive: true, suppressCmdLog: true})
 }
 
 type autocomplateState struct {
@@ -514,105 +470,35 @@ func (e *Engine) autocomplete(terminal *term.Terminal, engineState *State, state
 		state.pos = len(line)
 	}
 
-	cmdIn, err := parse("<stdin>", 0, line[:state.pos])
+	prefix, name, args, err := SplitCompletionInput(line[:state.pos])
 	if err != nil {
 		fmt.Fprintln(terminal, err.Error())
 		return "", 0, false
 	}
 
-	if cmdIn == nil {
-		state.suggestions = slices.Sorted(maps.Keys(e.Cmds))
+	state.suggestions = nil
+	if args == "" {
+		allNames := make(map[string]struct{}, len(e.Cmds))
+		for name := range e.Cmds {
+			allNames[name] = struct{}{}
+		}
+		for _, candidate := range slices.Sorted(maps.Keys(allNames)) {
+			if strings.HasPrefix(candidate, name) {
+				state.suggestions = append(state.suggestions, prefix+candidate)
+			}
+		}
 	} else {
-		inCmd := len(cmdIn.rawArgs) == 0 && line[state.pos-1:state.pos] != " "
-
-		cmd, found := e.Cmds[cmdIn.name]
-		// If the currently typed out command is not found or when we do not have a space
-		// after the command yet.
-		if inCmd {
-			state.suggestions = make([]string, 0)
-			for name := range e.Cmds {
-				if strings.HasPrefix(name, cmdIn.name) {
-					state.suggestions = append(state.suggestions, name)
-				}
-			}
+		var usage *CmdUsage
+		if cmd := e.Cmds[name]; cmd != nil {
+			usage = cmd.Usage()
 		} else {
-			// We are in arguments/flags, but the command is not found. No autocompletion.
-			if !found {
-				state.suggestions = nil
-				return "", 0, false
-			}
-
-			argsCB := cmd.Usage().AutocompleteArgs
-			flagsCB := cmd.Usage().AutocompleteFlag
-			if argsCB == nil && flagsCB == nil {
-				return "", 0, false // No autocompletion for this command.
-			}
-
-			if len(cmdIn.rawArgs) == 0 {
-				if argsCB == nil {
-					return "", 0, false // No autocompletion for this command.
-				}
-
-				state.suggestions = nil
-				for _, suggestion := range argsCB(engineState, nil, "") {
-					state.suggestions = append(state.suggestions, line[:state.pos]+suggestion)
-				}
-
-			} else {
-				fs := pflag.NewFlagSet(cmdIn.name, pflag.ContinueOnError)
-				if cmd.Usage().Flags != nil {
-					cmd.Usage().Flags(fs)
-				}
-
-				argOrFlags := autocompleteParse(line[:state.pos], fs)
-				if len(argOrFlags) == 0 {
-					return "", 0, false // No autocompletion for this command.
-				}
-				// Remove command name
-				argOrFlags = argOrFlags[1:]
-
-				var before []string
-				for i := 0; i < len(argOrFlags)-1; i++ {
-					if argOrFlags[i].arg != "" {
-						before = append(before, argOrFlags[i].arg)
-					}
-				}
-
-				last := argOrFlags[len(argOrFlags)-1]
-				if last.argOrFlag == 1 {
-					if flagsCB == nil {
-						return "", 0, false // No autocompletion for this command.
-					}
-
-					// Cursor is in a flag value
-					if last.hasValue {
-						state.suggestions = nil
-						for _, suggestion := range flagsCB(engineState, before, last.flagName, last.flagValue) {
-							state.suggestions = append(state.suggestions, line[:state.pos-len(last.flagValue)]+suggestion)
-						}
-					} else {
-						// If the current input is not a valid flag name
-						if fs.Lookup(last.flagName) == nil {
-							state.suggestions = nil
-							fs.VisitAll(func(f *pflag.Flag) {
-								if last.flagName == "" || strings.HasPrefix(f.Name, last.flagName) {
-									state.suggestions = append(state.suggestions, line[:state.pos-len(last.flagName)]+f.Name)
-								}
-							})
-						}
-					}
-				} else {
-					if argsCB == nil {
-						return "", 0, false // No autocompletion for this command.
-					}
-
-					state.suggestions = nil
-
-					for _, suggestion := range argsCB(engineState, before, last.arg) {
-						state.suggestions = append(state.suggestions, line[:state.pos-len(last.arg)]+suggestion)
-					}
-				}
-			}
+			return "", 0, false
+		}
+		input := strings.TrimLeft(args, " \t")
+		prefix += name + args[:len(args)-len(input)]
+		state.suggestions = completionSuggestions(engineState, input, usage, commandFlags(name, usage))
+		for i := range state.suggestions {
+			state.suggestions[i] = prefix + state.suggestions[i]
 		}
 	}
 
@@ -627,7 +513,7 @@ func (e *Engine) autocomplete(terminal *term.Terminal, engineState *State, state
 	suggestion := state.suggestions[state.current]
 	state.current++
 
-	return suggestion, len(suggestion), true
+	return suggestion + line[state.pos:], len(suggestion), true
 }
 
 // A command is a complete command parsed from a script.
@@ -637,6 +523,7 @@ type command struct {
 	want       expectedStatus
 	conds      []condition // all must be satisfied
 	name       string      // the name of the command; must be non-empty
+	nameEnd    int         // byte offset after the command name in the input
 	rawArgs    [][]argFragment
 	origArgs   []string // original arguments before pflag parsing
 	args       []string // shell-expanded arguments following name
@@ -681,7 +568,7 @@ func parse(filename string, lineno int, line string) (cmd *command, err error) {
 		quoted = false       // currently processing quoted text
 	)
 
-	flushArg := func() error {
+	flushArg := func(end int) error {
 		if len(rawArg) == 0 {
 			return nil // Nothing to flush.
 		}
@@ -723,6 +610,7 @@ func parse(filename string, lineno int, line string) (cmd *command, err error) {
 				return errors.New("empty command")
 			}
 			cmd.name = arg
+			cmd.nameEnd = end
 			return nil
 		}
 
@@ -737,7 +625,7 @@ func parse(filename string, lineno int, line string) (cmd *command, err error) {
 				rawArg = append(rawArg, argFragment{s: line[start:i], quoted: false})
 				start = -1
 			}
-			if err := flushArg(); err != nil {
+			if err := flushArg(i); err != nil {
 				return nil, err
 			}
 			if i >= len(line) || line[i] == '#' {
@@ -832,7 +720,7 @@ func quoteArgs(args []string) string {
 		if i > 0 {
 			b.WriteString(" ")
 		}
-		if strings.ContainsAny(arg, "'"+argSepChars) {
+		if arg == "" || strings.ContainsAny(arg, "'$;{}"+argSepChars) {
 			// Quote the argument to a form that would be parsed as a single argument.
 			b.WriteString("'")
 			b.WriteString(strings.ReplaceAll(arg, "'", "''"))
@@ -912,7 +800,12 @@ func autocompleteParse(line string, fs *pflag.FlagSet) []argOrFlag {
 	return argOrFlags
 }
 
-func (e *Engine) conditionsActive(s *State, conds []condition) (bool, error) {
+func (e *Engine) conditionsActive(s *State, conds []condition) (active bool, err error) {
+	defer func() {
+		if err != nil {
+			err = &setupError{err}
+		}
+	}()
 	for _, cond := range conds {
 		var impl Cond
 		prefix, suffix, ok := strings.Cut(cond.tag, ":")
@@ -948,115 +841,30 @@ func (e *Engine) conditionsActive(s *State, conds []condition) (bool, error) {
 
 func (e *Engine) runCommand(s *State, cmd *command, impl Cmd) error {
 	if impl == nil {
-		return cmdError(cmd, errors.New("unknown command"))
+		return cmdError(cmd, &setupError{errors.New("unknown command")})
 	}
 
 	usage := impl.Usage()
 
 	async := usage.Async
 	if cmd.background && !async {
-		return cmdError(cmd, errors.New("command cannot be run in background"))
+		return cmdError(cmd, &setupError{errors.New("command cannot be run in background")})
 	}
 
-	// Register and parse the flags. We do this regardless of whether [usage.Flags]
-	// is set in order to handle -h/--help.
-	fs := pflag.NewFlagSet(cmd.name, pflag.ContinueOnError)
-	fs.Usage = func() {} // Don't automatically handle error
-	fs.SetOutput(s.logOut)
-	autocomplete := fs.String("autocomplete", "", "")
-	if usage.Flags != nil {
-		usage.Flags(fs)
-	}
-	if err := fs.Parse(cmd.origArgs); err != nil {
-		if errors.Is(err, pflag.ErrHelp) {
-			out := new(strings.Builder)
-			err = e.ListCmds(out, true, "^"+cmd.name+"$")
-			s.stdout = out.String()
-			if s.stdout != "" {
-				s.Logf("[stdout]\n%s", s.stdout)
-			}
-			return err
-		}
-		if usage.Flags != nil {
-			return cmdError(cmd, err)
-		}
-
-		// [usage.Flags] wasn't given, so ignore the parsing errors as the
-		// command might do its own argument parsing.
-	} else {
-		cmd.args = fs.Args()
-		s.Flags = fs
-	}
-
-	if fs.Changed("autocomplete") {
-		if usage.AutocompleteArgs == nil && usage.AutocompleteFlag == nil {
-			return nil
-		}
-
-		fs := pflag.NewFlagSet(cmd.name, pflag.ContinueOnError)
-		if usage.Flags != nil {
-			usage.Flags(fs)
-		}
-
-		argOrFlags := autocompleteParse(*autocomplete, fs)
-		if len(argOrFlags) == 0 {
-			return nil
-		}
-
-		var before []string
-		for i := 0; i < len(argOrFlags)-1; i++ {
-			if argOrFlags[i].arg != "" {
-				before = append(before, argOrFlags[i].arg)
-			}
-		}
-
-		var suggestions []string
-		last := argOrFlags[len(argOrFlags)-1]
-		if last.argOrFlag == 1 {
-			if usage.AutocompleteFlag == nil {
-				return nil
-			}
-
-			// Cursor is in a flag value
-			if last.hasValue {
-				for _, suggestion := range usage.AutocompleteFlag(s, before, last.flagName, last.flagValue) {
-					suggestions = append(suggestions, cmd.name+" "+(*autocomplete)[:len(*autocomplete)-len(last.flagValue)]+suggestion)
-				}
-			} else {
-				// If the current input is not a valid flag name
-				if fs.Lookup(last.flagName) == nil {
-					fs.VisitAll(func(f *pflag.Flag) {
-						if last.flagName == "" || strings.HasPrefix(f.Name, last.flagName) {
-							suggestions = append(suggestions, cmd.name+" "+(*autocomplete)[:len(*autocomplete)-len(last.flagName)]+f.Name)
-						}
-					})
-				}
-			}
-		} else {
-			if usage.AutocompleteArgs == nil {
-				return nil
-			}
-
-			for _, suggestion := range usage.AutocompleteArgs(s, before, last.arg) {
-				suggestions = append(suggestions, cmd.name+" "+(*autocomplete)[:len(*autocomplete)-len(last.arg)]+suggestion)
-			}
-		}
-
-		s.stdout = strings.Join(suggestions, "\n") + "\n"
-		s.Logf("[stdout]\n%s", s.stdout)
-
-		return nil
+	handled, err := e.prepareCommand(s, cmd, usage)
+	if handled || err != nil {
+		return err
 	}
 
 	wait, runErr := impl.Run(s, cmd.args...)
 	if wait == nil {
 		if async && runErr == nil {
-			return cmdError(cmd, errors.New("internal error: async command returned a nil WaitFunc"))
+			return cmdError(cmd, &setupError{errors.New("internal error: async command returned a nil WaitFunc")})
 		}
 		return checkStatus(cmd, runErr)
 	}
 	if runErr != nil {
-		return cmdError(cmd, errors.New("internal error: command returned both an error and a WaitFunc"))
+		return cmdError(cmd, &setupError{errors.New("internal error: command returned both an error and a WaitFunc")})
 	}
 
 	if cmd.background {
@@ -1090,6 +898,112 @@ func (e *Engine) runCommand(s *State, cmd *command, impl Cmd) error {
 	return nil
 }
 
+// prepareCommand handles flags, help, and completion for either kind of command.
+// handled reports that the request was metadata only and the command must not run.
+func (e *Engine) prepareCommand(s *State, cmd *command, usage *CmdUsage) (handled bool, err error) {
+	fs := commandFlags(cmd.name, usage)
+	fs.SetOutput(s.logOut)
+	if err := fs.Parse(cmd.origArgs); err != nil {
+		if errors.Is(err, pflag.ErrHelp) {
+			out := new(strings.Builder)
+			err = e.ListCmds(out, true, "^"+regexp.QuoteMeta(cmd.name)+"$")
+			s.stdout = out.String()
+			if s.stdout != "" {
+				s.Logf("[stdout]\n%s", s.stdout)
+			}
+			return true, err
+		}
+		// Commands without declared flags may implement their own argument parsing.
+		if usage.Flags != nil {
+			return true, cmdError(cmd, &setupError{err})
+		}
+	} else {
+		cmd.args = fs.Args()
+		s.Flags = fs
+	}
+	if fs.Changed("autocomplete") {
+		input, _ := fs.GetString("autocomplete")
+		suggestions := completionSuggestions(s, input, usage, fs)
+		for i := range suggestions {
+			suggestions[i] = cmd.name + " " + suggestions[i]
+		}
+		s.stdout = strings.Join(suggestions, "\n")
+		if len(suggestions) > 0 {
+			s.stdout += "\n"
+			s.Logf("[stdout]\n%s", s.stdout)
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+func commandFlags(name string, usage *CmdUsage) *pflag.FlagSet {
+	fs := pflag.NewFlagSet(name, pflag.ContinueOnError)
+	fs.Usage = func() {}
+	fs.SetOutput(io.Discard)
+	fs.String("autocomplete", "", "")
+	if usage.Flags != nil {
+		usage.Flags(fs)
+	}
+	return fs
+}
+
+// completionSuggestions takes only the arguments before the cursor, matching
+// the shell protocol. Both local and remote completion use this same path.
+func completionSuggestions(s *State, input string, usage *CmdUsage, fs *pflag.FlagSet) []string {
+	parts := autocompleteParse(input, fs)
+	if len(parts) == 0 {
+		return nil
+	}
+	var before []string
+	for _, part := range parts[:len(parts)-1] {
+		if part.argOrFlag == 0 {
+			before = append(before, part.arg)
+		}
+	}
+	last := parts[len(parts)-1]
+	var candidates []string
+	suffix := last.arg
+	if last.argOrFlag == 1 {
+		if last.hasValue {
+			suffix = last.flagValue
+			if usage.AutocompleteFlag != nil {
+				candidates = usage.AutocompleteFlag(s, before, last.flagName, suffix)
+			}
+		} else {
+			suffix = last.flagName
+			fs.VisitAll(func(f *pflag.Flag) {
+				if f.Name != "autocomplete" && strings.HasPrefix(f.Name, suffix) {
+					candidates = append(candidates, f.Name)
+				}
+			})
+		}
+	} else if usage.AutocompleteArgs != nil {
+		candidates = usage.AutocompleteArgs(s, before, suffix)
+	}
+	prefix := input[:len(input)-len(suffix)]
+	result := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		result = append(result, prefix+candidate)
+	}
+	return result
+}
+
+func prepareArgs(s *State, cmd *command, usage *CmdUsage) {
+	var regexpArgs []int
+	if usage != nil && usage.RegexpArgs != nil {
+		rawArgs := make([]string, len(cmd.rawArgs))
+		for i, frags := range cmd.rawArgs {
+			for _, frag := range frags {
+				rawArgs[i] += frag.s
+			}
+		}
+		regexpArgs = usage.RegexpArgs(rawArgs...)
+	}
+	cmd.origArgs = expandArgs(s, cmd.rawArgs, regexpArgs)
+	cmd.args = cmd.origArgs
+}
+
 func checkStatus(cmd *command, err error) error {
 	if err == nil {
 		if cmd.want == failure || cmd.want == failureRetryOnSuccess {
@@ -1098,9 +1012,7 @@ func checkStatus(cmd *command, err error) error {
 		return nil
 	}
 
-	if s := (stopError{}); errors.As(err, &s) {
-		// This error originated in the Stop command.
-		// Propagate it as-is.
+	if unrecoverableError(err) {
 		return cmdError(cmd, err)
 	}
 
@@ -1114,14 +1026,6 @@ func checkStatus(cmd *command, err error) error {
 	}
 
 	if cmd.want == success || cmd.want == successRetryOnFailure {
-		return cmdError(cmd, err)
-	}
-
-	if (cmd.want == failure || cmd.want == failureRetryOnSuccess) && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
-		// The command was terminated because the script is no longer interested in
-		// its output, so we don't know what it would have done had it run to
-		// completion — for all we know, it could have exited without error if it
-		// ran just a smidge faster.
 		return cmdError(cmd, err)
 	}
 

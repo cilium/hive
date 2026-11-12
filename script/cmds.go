@@ -1346,6 +1346,8 @@ type stopError struct {
 	msg string
 }
 
+func (stopError) ScriptTermination() {}
+
 func (s stopError) Error() string {
 	if s.msg == "" {
 		return "stop"
