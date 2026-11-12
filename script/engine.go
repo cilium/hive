@@ -30,6 +30,9 @@
 //
 //	'Don''t communicate by sharing memory.'
 //
+// A semicolon separates commands on the same line, except inside a
+// single-quoted argument.
+//
 // A line beginning with # is a comment and conventionally explains what is
 // being done or tested at the start of a new section of the script.
 //

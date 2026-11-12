@@ -122,3 +122,38 @@ func TestExecutionErrors(t *testing.T) {
 	require.ErrorContains(t, err, "test:3:")
 	require.True(t, errors.Is(err, ParseError))
 }
+
+func TestExecuteSemicolons(t *testing.T) {
+	for _, line := range []bool{false, true} {
+		t.Run(map[bool]string{false: "script", true: "line"}[line], func(t *testing.T) {
+			e, s := NewEngine(), executionState(t)
+			source := ";; env FIRST=one; env SECOND=two; echo 'it''s; fine'; # echo wrong"
+			var err error
+			if line {
+				err = e.ExecuteLine(s, source, io.Discard)
+			} else {
+				err = e.Execute(s, "test", bufio.NewReader(strings.NewReader(source)), io.Discard)
+			}
+			require.NoError(t, err)
+			require.Equal(t, "it's; fine\n", s.Stdout())
+			first, _ := s.LookupEnv("FIRST")
+			second, _ := s.LookupEnv("SECOND")
+			require.Equal(t, "one", first)
+			require.Equal(t, "two", second)
+			source = "env BEFORE=set; missing; env AFTER=wrong"
+			if line {
+				err = e.ExecuteLine(s, source, io.Discard)
+			} else {
+				err = e.Execute(s, "test", bufio.NewReader(strings.NewReader(source)), io.Discard)
+			}
+			require.ErrorContains(t, err, "missing: unknown command")
+			before, _ := s.LookupEnv("BEFORE")
+			require.Equal(t, "set", before)
+			_, ok := s.LookupEnv("AFTER")
+			require.False(t, ok)
+		})
+	}
+	e, s := NewEngine(), executionState(t)
+	err := e.Execute(s, "test", bufio.NewReader(strings.NewReader("# section\necho ok; missing")), io.Discard)
+	require.ErrorContains(t, err, "test:2: missing: unknown command")
+}

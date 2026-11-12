@@ -47,6 +47,10 @@ func scanDelimiters(line string, visit func(int, byte)) {
 				visit(i, c)
 				return
 			}
+		case ';':
+			if !quoted {
+				visit(i, c)
+			}
 		}
 	}
 }
@@ -91,6 +95,8 @@ func splitStatements(line string, lineno int) []statement {
 	}
 	scanDelimiters(line, func(i int, c byte) {
 		switch c {
+		case ';':
+			emit(i, simpleStatement)
 		case '#':
 			emit(i, simpleStatement)
 			if i == 0 {
