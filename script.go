@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/cilium/hive/cell"
@@ -118,7 +119,9 @@ func hiveStopCmd(h *Hive, log *slog.Logger) script.Cmd {
 func RunRepl(h *Hive, in *os.File, out *os.File, prompt string) {
 	// Try to set the input into raw mode.
 	restore, err := script.MakeRaw(int(in.Fd()))
-	defer restore()
+	if err == nil {
+		defer restore()
+	}
 
 	inout := struct {
 		io.Reader
@@ -142,8 +145,9 @@ func RunRepl(h *Hive, in *os.File, out *os.File, prompt string) {
 	}
 
 	e := script.Engine{
-		Cmds:  cmds,
-		Conds: nil,
+		Cmds:      cmds,
+		BlockCmds: script.DefaultBlockCmds(),
+		Conds:     nil,
 	}
 
 	stop := make(chan struct{})
@@ -183,8 +187,28 @@ func RunRepl(h *Hive, in *os.File, out *os.File, prompt string) {
 				panic(err)
 			}
 		}
+		command := line
+		if script.BlockDepth(command) > 0 {
+			command = script.StripComment(command)
+			terminal.SetPrompt("... ")
+			for script.BlockDepth(command) > 0 {
+				blockLine, err := terminal.ReadLine()
+				if err != nil {
+					if errors.Is(err, io.EOF) {
+						return
+					}
+					panic(err)
+				}
+				blockLine = script.StripComment(blockLine)
+				if strings.TrimSpace(blockLine) == "" {
+					continue
+				}
+				command += "; " + blockLine
+			}
+			terminal.SetPrompt(prompt)
+		}
 
-		err = e.ExecuteLine(s, line, terminal)
+		err = e.ExecuteLine(s, command, terminal)
 		if err != nil {
 			fmt.Fprintln(terminal, err.Error())
 		}

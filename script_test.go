@@ -8,6 +8,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -74,6 +76,60 @@ hive/stop
 
 	expected := `> hive/start.*> example1.*hello1.*> example2.*hello2.*> hive/stop`
 	require.Regexp(t, expected, strings.ReplaceAll(stdout.String(), "\n", " "))
+}
+
+func TestRunReplBlockCommands(t *testing.T) {
+	in, err := os.CreateTemp(t.TempDir(), "repl-input")
+	require.NoError(t, err)
+	defer in.Close()
+
+	_, err = in.WriteString(strings.Join([]string{
+		"foreach item first second {",
+		"echo repl-${item}-result",
+		"}",
+		"foreach foo A B {",
+		"foreach bar 1 2 {",
+		"echo nested-${foo}-${bar}",
+		"}",
+		"}",
+		"foreach foo C D { foreach bar 3 4 { echo nested-${foo}-${bar} } }",
+		"echo repl-${/}-one; echo repl-${/}-two",
+		"foreach foo E F { echo loop-${foo}; echo block-${foo}-done }",
+		"retry --int\t 1ms --max-retries=1 { echo retry-${/}-ok }",
+		"echo completion-${/}-before; fore\t item A { ech\t completion-${item}-inline }",
+		"foreach item B { when true { ech\t completion-${item}-nested } }",
+		"foreach item C { retry --int\t 1ms --max-retries=1 { echo completion-${item}-flag } }",
+		"",
+	}, "\r"))
+	require.NoError(t, err)
+	_, err = in.Seek(0, io.SeekStart)
+	require.NoError(t, err)
+
+	out, err := os.CreateTemp(t.TempDir(), "repl-output")
+	require.NoError(t, err)
+	defer out.Close()
+
+	hive.RunRepl(hive.New(), in, out, "test> ")
+
+	_, err = out.Seek(0, io.SeekStart)
+	require.NoError(t, err)
+	output, err := io.ReadAll(out)
+	require.NoError(t, err)
+
+	normalized := strings.ReplaceAll(string(output), "\r\n", "\n")
+	for _, value := range []string{
+		"repl-first-result", "repl-second-result",
+		"nested-A-1", "nested-A-2", "nested-B-1", "nested-B-2",
+		"nested-C-3", "nested-C-4", "nested-D-3", "nested-D-4",
+		"completion-/-before", "completion-A-inline", "completion-B-nested", "completion-C-flag",
+		"repl-/-one", "repl-/-two", "loop-E", "loop-F", "block-E-done", "block-F-done", "retry-/-ok",
+	} {
+		require.Contains(t, normalized, "\n"+value+"\n")
+	}
+	require.NotContains(t, normalized, "unknown command")
+	require.NotContains(t, normalized, "parse error")
+	require.Contains(t, normalized, "\n> echo nested-A-1\n")
+	require.NotContains(t, normalized, "> echo nested-${foo}-${bar}\n")
 }
 
 func TestScriptCommandRetries(t *testing.T) {
