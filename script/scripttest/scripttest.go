@@ -42,6 +42,12 @@ func DefaultCmds() map[string]script.Cmd {
 	return cmds
 }
 
+// DefaultBlockCmds returns the default block commands available in script
+// tests.
+func DefaultBlockCmds() map[string]script.BlockCmd {
+	return script.DefaultBlockCmds()
+}
+
 // DefaultConds returns a set of broadly useful script conditions.
 //
 // This set includes all of the conditions in script.DefaultConds,
@@ -79,6 +85,13 @@ func (lb *logBuffer) Flush() error {
 // When the script completes, Run closes the state.
 func Run(t testing.TB, e *script.Engine, s *script.State, filename string, testScript io.Reader) {
 	t.Helper()
+	if e.BlockCmds == nil {
+		// Engines may be shared by parallel tests. Supply defaults without
+		// changing the caller's configuration.
+		local := *e
+		local.BlockCmds = DefaultBlockCmds()
+		e = &local
+	}
 	err := func() (err error) {
 		log := &logBuffer{t: t}
 		log.WriteString("\n") // Start output on a new line for consistent indentation.
@@ -142,6 +155,8 @@ func Skip() script.Cmd {
 type skipError struct {
 	msg string
 }
+
+func (skipError) ScriptTermination() {}
 
 func (s skipError) Error() string {
 	if s.msg == "" {

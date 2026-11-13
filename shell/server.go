@@ -34,7 +34,7 @@ func ServerCell(defaultSocketPath string) cell.Cell {
 // Most of them are for testing, so no need to clutter the shell
 // with them.
 var defaultCmdsToInclude = []string{
-	"cat", "exec", "help",
+	"cat", "echo", "exec", "help",
 }
 
 func registerShell(in hive.ScriptCmds, log *slog.Logger, lc cell.Lifecycle, jobs job.Registry, health cell.Health, c Config) {
@@ -51,8 +51,9 @@ func registerShell(in hive.ScriptCmds, log *slog.Logger, lc cell.Lifecycle, jobs
 		cmds[name] = defCmds[name]
 	}
 	e := script.Engine{
-		Cmds:  cmds,
-		Conds: nil,
+		Cmds:      cmds,
+		BlockCmds: script.DefaultBlockCmds(),
+		Conds:     nil,
 	}
 	jg.Add(job.OneShot("listener", shell{jg, log, &e, c}.listener))
 }

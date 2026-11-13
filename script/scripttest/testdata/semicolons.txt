@@ -1,0 +1,11 @@
+# Semicolons split commands while quoted semicolons remain part of an argument.
+env FIRST=one; env SECOND=two
+env FIRST
+stdout '^FIRST=one$'
+env SECOND
+stdout '^SECOND=two$'
+
+echo before; echo after
+stdout '^after$'
+echo 'left;right'
+stdout '^left;right$'

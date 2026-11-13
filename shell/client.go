@@ -185,9 +185,32 @@ repl:
 		if err != nil {
 			break
 		}
+		command := line
+		if script.BlockDepth(command) > 0 {
+			command = script.StripComment(command)
+			incomplete := false
+			console.SetPrompt("... ")
+			for script.BlockDepth(command) > 0 {
+				blockLine, err := console.ReadLine()
+				if err != nil {
+					incomplete = true
+					console.SetPrompt(prompt)
+					break
+				}
+				blockLine = script.StripComment(blockLine)
+				if strings.TrimSpace(blockLine) == "" {
+					continue
+				}
+				command += "; " + blockLine
+			}
+			console.SetPrompt(prompt)
+			if incomplete {
+				break repl
+			}
+		}
 
 		// Send the command to the server.
-		if _, err = fmt.Fprintln(conn, line); err != nil {
+		if _, err = fmt.Fprintln(conn, command); err != nil {
 			// Failed to send. See if should try reconnecting or whether we should
 			// print the error and stop.
 			if redial.Load() {
@@ -201,7 +224,7 @@ repl:
 				console.AutoCompleteCallback = autocomplete(conn, bio)
 
 				// Try again with the new connection.
-				if _, err = fmt.Fprintln(conn, line); err != nil {
+				if _, err = fmt.Fprintln(conn, command); err != nil {
 					fmt.Fprintf(console, "Error sending: %s\n", err)
 					break repl
 				}
@@ -276,21 +299,22 @@ func autocomplete(conn net.Conn, bio *bufio.Reader) func(line string, pos int, k
 			suggestionPos = len(line)
 		}
 
-		line = line[:suggestionPos]
-
-		// If the line does not contain a space, we are still typing out the initial command.
-		if !strings.Contains(line, " ") {
-			// Ask server for suggestions of root commands.
-			if _, err := fmt.Fprintln(conn, "help -a "+line); err != nil {
-				return "", 0, false
-			}
+		suffix := line[suggestionPos:]
+		prefix, cmd, args, err := script.SplitCompletionInput(line[:suggestionPos])
+		if err != nil {
+			return "", 0, false
+		}
+		query := ""
+		if args == "" {
+			// Quote the prefix so delimiters cannot execute commands while completing.
+			query = "help -a '" + strings.ReplaceAll(cmd, "'", "''") + "'"
 		} else {
-			cmd, args, _ := strings.Cut(line, " ")
-			args = strings.Replace(args, "'", "\\'", -1) // Escape single quotes for the shell.
-			// Ask server for suggestions for the specific command.
-			if _, err := fmt.Fprintf(conn, "%s --autocomplete='%s'\n", cmd, args); err != nil {
-				return "", 0, false
-			}
+			input := strings.TrimLeft(args, " \t")
+			prefix += cmd + args[:len(args)-len(input)]
+			query = cmd + " --autocomplete='" + strings.ReplaceAll(input, "'", "''") + "'"
+		}
+		if _, err := fmt.Fprintln(conn, query); err != nil {
+			return "", 0, false
 		}
 
 		var suggestions []string
@@ -311,6 +335,7 @@ func autocomplete(conn net.Conn, bio *bufio.Reader) func(line string, pos int, k
 			}
 
 			line, ended := strings.CutSuffix(line, endMarker)
+			line, errored := strings.CutSuffix(line, errorMarker)
 			suggestion += line
 			if !isPrefix {
 				if suggestion != "" {
@@ -318,11 +343,20 @@ func autocomplete(conn net.Conn, bio *bufio.Reader) func(line string, pos int, k
 				}
 				suggestion = ""
 			}
+			if errored {
+				return "", 0, false
+			}
 			if ended {
 				break
 			}
 		}
 
+		for i := range suggestions {
+			if args != "" {
+				suggestions[i] = strings.TrimPrefix(suggestions[i], cmd+" ")
+			}
+			suggestions[i] = prefix + suggestions[i]
+		}
 		slices.Sort(suggestions)
 
 		if suggestionIndex > len(suggestions)-1 {
@@ -336,6 +370,6 @@ func autocomplete(conn net.Conn, bio *bufio.Reader) func(line string, pos int, k
 
 		currentSuggestion := suggestions[suggestionIndex]
 		suggestionIndex++
-		return currentSuggestion, len(currentSuggestion), true
+		return currentSuggestion + suffix, len(currentSuggestion), true
 	}
 }
