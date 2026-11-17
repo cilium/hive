@@ -1,0 +1,149 @@
+# Exercise the built-in block commands and nested block execution.
+foreach foo A B {
+	foreach bar 1 2 {
+		exec sh -c 'printf "%s %s\n" "$foo" "$bar" >> blocks.out'
+	}
+}
+
+when true {
+	exec sh -c 'printf "when true\n" >> blocks.out'
+}
+when false {
+	exec sh -c 'printf "when false\n" >> blocks.out'
+}
+unless false {
+	exec sh -c 'printf "unless false\n" >> blocks.out'
+}
+unless 1 {
+	exec sh -c 'printf "unless true\n" >> blocks.out'
+}
+
+repeat i 3 {
+	exec sh -c 'printf "repeat %s\n" "$i" >> blocks.out'
+}
+
+env BLOCK_TEMP=
+withenv BLOCK_TEMP=temporary {
+	exec sh -c 'printf "withenv %s\n" "$BLOCK_TEMP" >> blocks.out'
+	env BLOCK_PERSIST=persisted
+}
+env BLOCK_TEMP
+stdout '^BLOCK_TEMP=$'
+env BLOCK_PERSIST
+stdout '^BLOCK_PERSIST=persisted$'
+
+[testtrue] {
+	echo condition-true
+}
+stdout '^condition-true$'
+[testfalse] {
+	echo condition-false
+}
+stdout '^condition-true$'
+
+[testtrue] foreach item ran {
+	echo condition-command-$item
+}
+stdout '^condition-command-ran$'
+[testfalse] foreach item skipped-command {
+	echo condition-command-$item
+}
+stdout '^condition-command-ran$'
+
+env INLINE_FOREACH=
+line 'foreach item A B { env INLINE_FOREACH=$item }'
+env INLINE_FOREACH
+stdout '^INLINE_FOREACH=B$'
+
+env INLINE_WHEN=initial
+line 'when 1 { env INLINE_WHEN=ran }'
+env INLINE_WHEN
+stdout '^INLINE_WHEN=ran$'
+line 'when false { env INLINE_WHEN=wrong }'
+env INLINE_WHEN
+stdout '^INLINE_WHEN=ran$'
+
+env INLINE_UNLESS=initial
+line 'unless false { env INLINE_UNLESS=ran }'
+env INLINE_UNLESS
+stdout '^INLINE_UNLESS=ran$'
+line 'unless true { env INLINE_UNLESS=wrong }'
+env INLINE_UNLESS
+stdout '^INLINE_UNLESS=ran$'
+
+env INLINE_REPEAT=
+line 'repeat i 2 { env INLINE_REPEAT=$i }'
+env INLINE_REPEAT
+stdout '^INLINE_REPEAT=1$'
+
+env INLINE_TEMP=
+line 'withenv INLINE_TEMP=temporary { env INLINE_WITHENV=$INLINE_TEMP }'
+env INLINE_TEMP
+stdout '^INLINE_TEMP=$'
+env INLINE_WITHENV
+stdout '^INLINE_WITHENV=temporary$'
+
+retry --max-retries=2 {
+	retrytest --not-empty=xyz abc
+}
+rm retrytest
+retry --until-failure --max-retries=2 {
+	retrytest --not-empty=xyz abc
+}
+rm retrytest
+line 'retry --max-retries=2 { retrytest --not-empty=xyz abc }'
+rm retrytest
+line 'retry --until-failure --max-retries=2 { retrytest --not-empty=xyz abc }'
+
+rm retrytest
+* {
+	retrytest --not-empty=xyz abc
+}
+! {
+	cat missing-block-file.txt
+}
+
+! foreach item missing {
+	cat missing-block-file.txt
+}
+
+exec sh -c 'printf "done\n" >> blocks.out'
+cmp blocks.out blocks_expected.txt
+echo block-modifiers-ok
+stdout '^block-modifiers-ok$'
+
+# Execute inline blocks directly, mixing semicolons, comments, and expansions.
+foreach item direct last { env DIRECT=$item }; env DIRECT
+stdout '^DIRECT=last$'
+when true { # A comment after the opening delimiter is valid.
+ foreach item A B { env DIRECT=${item} } # Closing comments are valid too.
+}
+env DIRECT
+stdout '^DIRECT=B$'
+! { foreach item missing { cat missing-block-file.txt } }
+foreach item { env DIRECT=wrong }
+repeat i 0 { env DIRECT=wrong }
+env DIRECT
+stdout '^DIRECT=B$'
+
+withenv BLOCK_TEMP=outer {
+ withenv BLOCK_TEMP=inner { env BLOCK_TEMP=changed }
+ env BLOCK_TEMP
+ stdout '^BLOCK_TEMP=outer$'
+ env BLOCK_TEMP=changed
+}
+env BLOCK_TEMP
+stdout '^BLOCK_TEMP=$'
+
+-- blocks_expected.txt --
+A 1
+A 2
+B 1
+B 2
+when true
+unless false
+repeat 0
+repeat 1
+repeat 2
+withenv temporary
+done
