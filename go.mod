@@ -13,7 +13,7 @@ require (
 	github.com/stretchr/testify v1.12.1
 	go.uber.org/dig v1.19.0
 	go.uber.org/goleak v1.3.0
-	golang.org/x/exp v0.0.0-20261119141654-b15d094f3610
+	golang.org/x/exp v0.0.0-20261121134650-e1094eeca1b5
 	golang.org/x/sys v0.50.0
 	golang.org/x/term v0.48.0
 	golang.org/x/tools v0.53.0
