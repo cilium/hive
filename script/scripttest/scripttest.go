@@ -143,6 +143,8 @@ type skipError struct {
 	msg string
 }
 
+func (skipError) ScriptTermination() {}
+
 func (s skipError) Error() string {
 	if s.msg == "" {
 		return "skip"
