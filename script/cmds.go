@@ -976,6 +976,15 @@ func Help() Cmd {
 					}
 					fmt.Fprintln(out, cmd)
 				}
+				for cmd := range maps.Keys(s.engine.BlockCmds) {
+					if _, exists := s.engine.Cmds[cmd]; exists {
+						continue
+					}
+					if len(args) > 0 && !strings.HasPrefix(cmd, args[0]) {
+						continue
+					}
+					fmt.Fprintln(out, cmd)
+				}
 				wait := func(*State) (stdout, stderr string, err error) {
 					return out.String(), "", nil
 				}

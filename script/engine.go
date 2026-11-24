@@ -46,6 +46,14 @@
 // The command prefix [cond] indicates that the command on the rest of the line
 // should only run when the condition is satisfied.
 //
+// A registered block command is written as a command line followed by an
+// opening brace, with its body ending at the matching closing brace. Braces
+// are standalone tokens. Blocks may be inline or span several lines, and
+// control when and how often their body is executed.
+// An anonymous block may instead have command prefixes before its opening
+// brace: conditions guard the whole block, and status prefixes apply to body
+// commands that do not have their own prefix.
+//
 // A condition can be negated: [!root] means to run the rest of the line only if
 // the user is not root. Multiple conditions may be given for a single command,
 // for example, '[linux] [amd64] skip'. The command will run if all conditions
@@ -74,8 +82,10 @@ import (
 //
 // The same Engine may execute multiple scripts concurrently.
 type Engine struct {
-	Cmds  map[string]Cmd
-	Conds map[string]Cond
+	Cmds map[string]Cmd
+	// BlockCmds contains commands that control the execution of a script block.
+	BlockCmds map[string]BlockCmd
+	Conds     map[string]Cond
 
 	// If Quiet is true, Execute deletes log prints from the previous
 	// section when starting a new section.
@@ -98,6 +108,7 @@ type Engine struct {
 func NewEngine() *Engine {
 	return &Engine{
 		Cmds:             DefaultCmds(),
+		BlockCmds:        DefaultBlockCmds(),
 		Conds:            DefaultConds(),
 		RetryInterval:    defaultRetryInterval,
 		MaxRetryInterval: defaultMaxRetryInterval,
@@ -127,6 +138,43 @@ type Cmd interface {
 	// Usage returns the usage for the command, which the caller must not modify.
 	Usage() *CmdUsage
 }
+
+// A BlockCmd is a command that controls the execution of a block of script.
+// Unlike a Cmd, it receives a CallBlock function that executes the block.
+type BlockCmd interface {
+	// Run executes the block command.
+	//
+	// CallBlock may be called multiple times. Each call runs the block from the
+	// beginning with extraEnv temporarily added to the script environment.
+	// CallBlock must be called synchronously and must not be retained after Run returns.
+	Run(s *State, args []string, callBlock CallBlock) error
+
+	// Usage returns the usage for the block command, which the caller must not modify.
+	Usage() *CmdUsage
+}
+
+// CallBlock executes the body of a BlockCmd with extra environment variables.
+// Supplied keys are restored to their previous values (or removed if absent)
+// when the call returns, even if the body modified them. Changes to other keys
+// persist. The block handler's State.Flags is restored after each call.
+type CallBlock func(extraEnv map[string]string) error
+
+// BlockCommand returns a new BlockCmd with a Usage method that returns a copy
+// of the given CmdUsage and a Run method that calls the given function.
+func BlockCommand(usage CmdUsage, run func(*State, []string, CallBlock) error) BlockCmd {
+	return &funcBlockCmd{usage: usage, run: run}
+}
+
+type funcBlockCmd struct {
+	usage CmdUsage
+	run   func(*State, []string, CallBlock) error
+}
+
+func (c *funcBlockCmd) Run(s *State, args []string, callBlock CallBlock) error {
+	return c.run(s, args, callBlock)
+}
+
+func (c *funcBlockCmd) Usage() *CmdUsage { return &c.usage }
 
 // A WaitFunc is a function called to retrieve the results of a Cmd.
 type WaitFunc func(*State) (stdout, stderr string, err error)
@@ -214,7 +262,9 @@ func (e *Engine) Execute(s *State, file string, script *bufio.Reader, log io.Wri
 type executeOptions struct {
 	interactive         bool
 	suppressCmdLog      bool
+	expandCmdLog        bool
 	commentsAreSections bool
+	deferLog            bool // the enclosing executor owns section logging
 }
 
 func (e *Engine) execute(s *State, file string, source *statementReader, log io.Writer, opts executeOptions) (err error) {
@@ -245,6 +295,9 @@ func (e *Engine) execute(s *State, file string, source *statementReader, log io.
 	// endSection flushes the logs for the current section from s.log to log.
 	// ok indicates whether all commands in the section succeeded.
 	endSection := func(ok bool) error {
+		if opts.deferLog {
+			return nil
+		}
 		var err error
 		if sectionStart.IsZero() {
 			// We didn't write a section header or record a timestamp, so just dump the
@@ -283,7 +336,7 @@ func (e *Engine) execute(s *State, file string, source *statementReader, log io.
 	}
 
 	// A stop completes the section successfully. Other errors and panics must
-	// retain its logs.
+	// retain its logs. Block bodies leave section logging to their caller.
 	defer func() {
 		var stop stopError
 		stopped := errors.As(err, &stop)
@@ -308,6 +361,9 @@ func (e *Engine) execute(s *State, file string, source *statementReader, log io.
 		}
 		lineno = stmt.line
 		line := stmt.text
+		if stmt.kind == closeBlock {
+			return lineErr(fmt.Errorf("%w: unexpected closing brace", ParseError))
+		}
 
 		// The comment character "#" at the start of the line delimits a section of
 		// the script.
@@ -335,12 +391,86 @@ func (e *Engine) execute(s *State, file string, source *statementReader, log io.
 			continue
 		}
 
+		if stmt.kind == openBlock {
+			header := stmt.text
+			line += " {"
+			headerLine := lineno
+			block, err := source.block(stmt)
+			if err != nil {
+				lineno = headerLine
+				return lineErr(fmt.Errorf("%w: %w", ParseError, err))
+			}
+			cmd, anonymous, err := parseBlockHeader(file, headerLine, header)
+			if err != nil {
+				lineno = headerLine
+				return lineErr(fmt.Errorf("%w: %w", ParseError, err))
+			}
+			if !anonymous && cmd.want == success && s.blockWant != success {
+				cmd.want = s.blockWant
+			}
+			if !anonymous && (cmd.want == successRetryOnFailure || cmd.want == failureRetryOnSuccess) {
+				lineno = headerLine
+				return lineErr(fmt.Errorf("%w: retry prefixes cannot be used on block commands; use the retry block command instead", ParseError))
+			}
+			if cmd.background {
+				lineno = headerLine
+				return lineErr(cmdError(cmd, &setupError{errors.New("block command cannot be run in background")}))
+			}
+			lineno = headerLine
+			if !opts.suppressCmdLog && !opts.expandCmdLog {
+				s.Logf("> %s\n", line)
+			}
+			ok, err := e.conditionsActive(s, cmd.conds)
+			if err != nil {
+				return lineErr(err)
+			}
+			if !ok {
+				s.Logf("[condition not met]\n")
+				continue
+			}
+			if anonymous {
+				if opts.expandCmdLog {
+					s.Logf("> %s\n", line)
+				}
+				want := cmd.want
+				if want == success {
+					want = s.blockWant
+				}
+				run := func() error { return e.executeBlock(s, file, block, log, opts, nil, want) }
+				sectionCmds = append(sectionCmds, run)
+				err = run()
+				if err != nil {
+					return lineErr(err)
+				}
+				continue
+			}
+			blockImpl := e.BlockCmds[cmd.name]
+			if blockImpl == nil {
+				return lineErr(cmdError(cmd, &setupError{errors.New("unknown block command")}))
+			}
+			prepareArgs(s, cmd, blockImpl.Usage())
+			run := func() error {
+				if opts.expandCmdLog {
+					s.Logf("> %s {\n", expandedCommand(cmd))
+				}
+				return e.runBlockCommand(s, cmd, blockImpl, func(extraEnv map[string]string) error {
+					return e.executeBlock(s, file, block, log, opts, extraEnv, success)
+				})
+			}
+			sectionCmds = append(sectionCmds, run)
+			err = run()
+			if err != nil {
+				return lineErr(err)
+			}
+			continue
+		}
+
 		cmd, err := parse(file, lineno, line)
 		if cmd == nil && err == nil {
 			continue // Ignore blank lines.
 		}
 
-		if !opts.suppressCmdLog {
+		if !opts.suppressCmdLog && !opts.expandCmdLog {
 			s.Logf("> %s\n", line)
 		}
 		if err != nil {
@@ -356,8 +486,23 @@ func (e *Engine) execute(s *State, file string, source *statementReader, log io.
 			s.Logf("[condition not met]\n")
 			continue
 		}
+		if cmd.want == success && s.blockWant != success {
+			cmd.want = s.blockWant
+		}
 
 		impl := e.Cmds[cmd.name]
+		if impl == nil && e.BlockCmds[cmd.name] != nil {
+			usage := e.BlockCmds[cmd.name].Usage()
+			prepareArgs(s, cmd, usage)
+			handled, metadataErr := e.prepareCommand(s, cmd, usage)
+			if metadataErr != nil {
+				return lineErr(metadataErr)
+			}
+			if handled {
+				continue
+			}
+			return lineErr(cmdError(cmd, &setupError{fmt.Errorf("%w: block command requires a body", ErrUsage)}))
+		}
 
 		if impl != nil {
 			prepareArgs(s, cmd, impl.Usage())
@@ -371,6 +516,9 @@ func (e *Engine) execute(s *State, file string, source *statementReader, log io.
 		// Keep the prepared invocation so legacy retries replay blocks as well
 		// as ordinary commands in the current section.
 		run := func() error {
+			if opts.expandCmdLog {
+				s.Logf("> %s\n", expandedCommand(cmd))
+			}
 			return e.runCommand(s, cmd, impl)
 		}
 		sectionCmds = append(sectionCmds, run)
@@ -383,8 +531,13 @@ func (e *Engine) execute(s *State, file string, source *statementReader, log io.
 				sectionStart = time.Time{}
 
 				// Append the new line that section start omitted and flush the log.
-				io.WriteString(log, "\n")
-				s.FlushLog()
+				retryLog := log
+				if opts.deferLog {
+					retryLog = s.LogWriter()
+				} else {
+					io.WriteString(log, "\n")
+					s.FlushLog()
+				}
 
 				// Command wants retries. Retry the whole section
 				backoff := exponentialBackoff{max: maxRetryInterval, interval: retryInterval}
@@ -398,7 +551,7 @@ func (e *Engine) execute(s *State, file string, source *statementReader, log io.
 					}
 
 					retryDuration := backoff.get()
-					fmt.Fprintf(log, "(command %q failed, retrying in %s...)\n", line, retryDuration)
+					fmt.Fprintf(retryLog, "(command %q failed, retrying in %s...)\n", line, retryDuration)
 					select {
 					case <-s.Context().Done():
 						s.RetryCount = 0
@@ -411,9 +564,11 @@ func (e *Engine) execute(s *State, file string, source *statementReader, log io.
 							break
 						}
 					}
-					s.FlushLog()
+					if !opts.deferLog {
+						s.FlushLog()
+					}
 				}
-				fmt.Fprintf(log, "(command %q succeeded after %d retries in %.3fs)\n", line, s.RetryCount, time.Since(retryStart).Seconds())
+				fmt.Fprintf(retryLog, "(command %q succeeded after %d retries in %.3fs)\n", line, s.RetryCount, time.Since(retryStart).Seconds())
 				s.RetryCount = 0
 			} else {
 				return lineErr(err)
@@ -425,6 +580,20 @@ func (e *Engine) execute(s *State, file string, source *statementReader, log io.
 		return lineErr(err)
 	}
 	return nil
+}
+
+// executeBlock scopes invocation metadata separately from persistent script state.
+// Only the supplied environment keys are restored; other body changes persist.
+func (e *Engine) executeBlock(s *State, file string, body []statement, log io.Writer, opts executeOptions, extraEnv map[string]string, want expectedStatus) error {
+	opts.suppressCmdLog = false
+	opts.expandCmdLog = true
+	opts.commentsAreSections = false
+	opts.deferLog = true
+	return s.withEnv(extraEnv, func() error {
+		return s.withBlockWant(want, func() error {
+			return e.execute(s, file, &statementReader{pending: body}, log, opts)
+		})
+	})
 }
 
 func (e *Engine) ExecuteLine(s *State, line string, log io.Writer) error {
@@ -481,8 +650,11 @@ func (e *Engine) autocomplete(terminal *term.Terminal, engineState *State, state
 
 	state.suggestions = nil
 	if args == "" {
-		allNames := make(map[string]struct{}, len(e.Cmds))
+		allNames := make(map[string]struct{}, len(e.Cmds)+len(e.BlockCmds))
 		for name := range e.Cmds {
+			allNames[name] = struct{}{}
+		}
+		for name := range e.BlockCmds {
 			allNames[name] = struct{}{}
 		}
 		for _, candidate := range slices.Sorted(maps.Keys(allNames)) {
@@ -494,6 +666,8 @@ func (e *Engine) autocomplete(terminal *term.Terminal, engineState *State, state
 		var usage *CmdUsage
 		if cmd := e.Cmds[name]; cmd != nil {
 			usage = cmd.Usage()
+		} else if block := e.BlockCmds[name]; block != nil {
+			usage = block.Usage()
 		} else {
 			return "", 0, false
 		}
@@ -688,6 +862,20 @@ func parse(filename string, lineno int, line string) (cmd *command, err error) {
 	return cmd, nil
 }
 
+func parseBlockHeader(file string, line int, header string) (*command, bool, error) {
+	const sentinel = "__anonymous_block__"
+	cmd, err := parse(file, line, strings.TrimSpace(header+" "+sentinel))
+	if err != nil {
+		return nil, false, err
+	}
+	if cmd.name == sentinel && len(cmd.rawArgs) == 0 {
+		cmd.name = ""
+		return cmd, true, nil
+	}
+	cmd, err = parse(file, line, header)
+	return cmd, false, err
+}
+
 // expandArgs expands the shell variables in rawArgs and joins them to form the
 // final arguments to pass to a command.
 func expandArgs(s *State, rawArgs [][]argFragment, regexpArgs []int) []string {
@@ -712,6 +900,28 @@ func expandArgs(s *State, rawArgs [][]argFragment, regexpArgs []int) []string {
 		args = append(args, b.String())
 	}
 	return args
+}
+
+func expandedCommand(cmd *command) string {
+	var words []string
+	for _, cond := range cmd.conds {
+		guard := cond.tag
+		if !cond.want {
+			guard = "!" + guard
+		}
+		words = append(words, "["+guard+"]")
+	}
+	if cmd.want != success {
+		words = append(words, string(cmd.want))
+	}
+	words = append(words, cmd.name)
+	if len(cmd.origArgs) > 0 {
+		words = append(words, quoteArgs(cmd.origArgs))
+	}
+	if cmd.background {
+		words = append(words, "&")
+	}
+	return strings.Join(words, " ")
 }
 
 // quoteArgs returns a string that parse would parse as args when passed to a command.
@@ -901,6 +1111,14 @@ func (e *Engine) runCommand(s *State, cmd *command, impl Cmd) error {
 	return nil
 }
 
+func (e *Engine) runBlockCommand(s *State, cmd *command, impl BlockCmd, callBlock CallBlock) error {
+	handled, err := e.prepareCommand(s, cmd, impl.Usage())
+	if handled || err != nil {
+		return err
+	}
+	return checkStatus(cmd, impl.Run(s, cmd.args, callBlock))
+}
+
 // prepareCommand handles flags, help, and completion for either kind of command.
 // handled reports that the request was metadata only and the command must not run.
 func (e *Engine) prepareCommand(s *State, cmd *command, usage *CmdUsage) (handled bool, err error) {
@@ -1051,14 +1269,20 @@ func (e *Engine) ListCmds(w io.Writer, verbose bool, regexMatch string) error {
 	for name := range e.Cmds {
 		names = append(names, name)
 	}
+	for name := range e.BlockCmds {
+		if _, exists := e.Cmds[name]; !exists {
+			names = append(names, name)
+		}
+	}
 	sort.Strings(names)
 
 	for _, name := range names {
 		if re != nil && !re.MatchString(name) {
 			continue
 		}
-		cmd, ok := e.Cmds[name]
-		if !ok {
+		cmd, isCmd := e.Cmds[name]
+		blockCmd, isBlockCmd := e.BlockCmds[name]
+		if !isCmd && !isBlockCmd {
 			_, err := fmt.Fprintf(w, "command %q is not registered\n", name)
 			if err != nil {
 				return err
@@ -1066,10 +1290,17 @@ func (e *Engine) ListCmds(w io.Writer, verbose bool, regexMatch string) error {
 			return nil
 		}
 
-		usage := cmd.Usage()
+		var usage *CmdUsage
+		if isBlockCmd {
+			usage = blockCmd.Usage()
+		} else {
+			usage = cmd.Usage()
+		}
 
 		suffix := ""
-		if usage.Async {
+		if isBlockCmd {
+			suffix = " { ... }"
+		} else if usage.Async {
 			suffix = " [&]"
 		}
 
