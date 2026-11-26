@@ -1,0 +1,16 @@
+# Shared scenario receives the parameter and both sets of fixtures.
+env SCENARIO_PARAM
+stdout '^SCENARIO_PARAM=hello$'
+exists $WORK/child-fixture.txt
+cat parent-fixture.txt
+stdout '^from parent$'
+cat child-fixture.txt
+stdout '^from called archive$'
+
+# These changes must not leak back to the caller.
+env CALL_LEAK=inside
+mkdir nested
+cd nested
+
+-- child-fixture.txt --
+from called archive
